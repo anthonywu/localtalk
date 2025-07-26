@@ -14,7 +14,7 @@ from localtalk.models.config import KokoroConfig
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # Suppress mlx_audio INFO logs
-logging.getLogger("mlx_audio").setLevel(logging.WARNING)
+logging.getLogger("mlx_audio.tts.models.kokoro.kokoro").setLevel(logging.WARNING)
 
 
 class KokoroTTSService:
@@ -36,6 +36,7 @@ class KokoroTTSService:
 
             try:
                 from mlx_audio.tts.generate import generate_audio
+
                 self.generate_audio = generate_audio
                 self._initialized = True
                 self.console.print(f"[green]Kokoro TTS ready (model: {self.config.model})")
@@ -80,11 +81,12 @@ class KokoroTTSService:
                     audio_format="wav",
                     sample_rate=self.config.sample_rate,
                     join_audio=True,
-                    verbose=False  # Suppress output
+                    verbose=False,  # Suppress output
                 )
 
                 # Load the generated audio file
                 import soundfile as sf
+
                 audio_path = Path("temp_kokoro.wav")
                 if audio_path.exists():
                     audio_array, sample_rate = sf.read(audio_path)
@@ -114,9 +116,9 @@ class KokoroTTSService:
         speed: float | None = None,
     ) -> tuple[int, np.ndarray]:
         """Synthesize long-form text.
-        
+
         For Kokoro, we can handle long text directly as it has good chunking.
-        
+
         Args:
             text: Long text to synthesize
             voice: Optional voice override
@@ -152,11 +154,11 @@ class KokoroTTSService:
             voice=voice,
             speed=self.config.speed,
             lang_code=self.config.lang_code,
-            file_prefix=str(output_path.with_suffix('')),
+            file_prefix=str(output_path.with_suffix("")),
             audio_format="wav",
             sample_rate=self.config.sample_rate,
             join_audio=True,
-            verbose=False
+            verbose=False,
         )
 
         self.console.print(f"[dim]Voice sample saved to: {output_path}[/dim]")

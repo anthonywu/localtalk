@@ -20,7 +20,7 @@ except ImportError:
 
 __version__ = "0.1.0"
 
-from localtalk.core.assistant import VoiceAssistant
-from localtalk.models.config import AppConfig
+from localtalk.core.assistant import VoiceAssistant  # noqa: E402
+from localtalk.models.config import AppConfig  # noqa: E402
 
 __all__ = ["VoiceAssistant", "AppConfig"]

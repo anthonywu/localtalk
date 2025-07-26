@@ -12,9 +12,25 @@ def analyze_emotion(text: str) -> float:
     """
     # Keywords that suggest more emotion
     emotional_keywords = [
-        "amazing", "terrible", "love", "hate", "excited", "sad", "happy", "angry",
-        "wonderful", "awful", "fantastic", "horrible", "great", "bad", "excellent",
-        "poor", "!", "?!", "..."
+        "amazing",
+        "terrible",
+        "love",
+        "hate",
+        "excited",
+        "sad",
+        "happy",
+        "angry",
+        "wonderful",
+        "awful",
+        "fantastic",
+        "horrible",
+        "great",
+        "bad",
+        "excellent",
+        "poor",
+        "!",
+        "?!",
+        "...",
     ]
 
     emotion_score = 0.5  # Default neutral

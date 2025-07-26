@@ -18,13 +18,14 @@ class SpeechRecognitionService:
         """Load the Whisper model."""
         try:
             import whisper
+
             self.whisper = whisper
             self.console.print(f"[cyan]Loading Whisper model: {self.config.model_size}")
             return whisper.load_model(self.config.model_size, device=self.config.device)
         except ImportError as e:
             self.console.print(f"[red]❌ Failed to import Whisper: {e}")
             self.console.print("[yellow]Try running: uv pip install openai-whisper")
-            raise SystemExit(1)
+            raise SystemExit(1)  # noqa: B904
 
     def transcribe(self, audio_data: np.ndarray) -> str:
         """Transcribe audio data to text.

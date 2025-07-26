@@ -66,7 +66,9 @@ class KokoroConfig(BaseModel):
     model: str = Field(default="mlx-community/Kokoro-82M-4bit", description="Kokoro model to use")
     voice: str = Field(default="af_heart", description="Voice to use (af_heart, af_nova, af_bella, bf_emma)")
     speed: float = Field(default=1.0, description="Speech speed (0.5-2.0)")
-    lang_code: str = Field(default="a", description="Language code (a=American English, b=British, j=Japanese, z=Chinese)")
+    lang_code: str = Field(
+        default="a", description="Language code (a=American English, b=British, j=Japanese, z=Chinese)"
+    )
     sample_rate: int = Field(default=24000, description="Audio sample rate")
 
     @field_validator("speed")
@@ -87,7 +89,7 @@ class AppConfig(BaseModel):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
-        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words.",
+        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user.",
         description="System prompt for the LLM",
     )
     tts_backend: str = Field(default="kokoro", description="TTS backend to use: 'kokoro', 'chatterbox', or 'none'")

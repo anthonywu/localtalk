@@ -78,7 +78,7 @@ class FastTextToSpeechService:
         import transformers
 
         # Store the original LlamaModel
-        if not hasattr(transformers, '_original_LlamaModel'):
+        if not hasattr(transformers, "_original_LlamaModel"):
             transformers._original_LlamaModel = transformers.LlamaModel
 
             # Create a patched version
@@ -101,7 +101,7 @@ class FastTextToSpeechService:
         tqdm.disable = True
 
         # Alternative: redirect tqdm to null
-        os.environ['TQDM_DISABLE'] = '1'
+        os.environ["TQDM_DISABLE"] = "1"
 
     def synthesize_fast(
         self,
@@ -126,11 +126,11 @@ class FastTextToSpeechService:
                 audio_prompt_path=str(audio_prompt_path) if audio_prompt_path else None,
                 # Reduced quality parameters for speed
                 exaggeration=0.3,  # Less emotion processing
-                cfg_weight=0.2,    # Lower CFG weight for faster generation
-                temperature=0.6,   # Lower temperature for more deterministic output
+                cfg_weight=0.2,  # Lower CFG weight for faster generation
+                temperature=0.6,  # Lower temperature for more deterministic output
                 repetition_penalty=1.0,  # Disable repetition penalty
-                min_p=0.1,        # Higher min_p to reduce token choices
-                top_p=0.9,        # Lower top_p for faster sampling
+                min_p=0.1,  # Higher min_p to reduce token choices
+                top_p=0.9,  # Lower top_p for faster sampling
             )
 
         audio_array = wav.squeeze().cpu().numpy()

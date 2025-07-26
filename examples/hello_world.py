@@ -6,7 +6,7 @@ This example demonstrates basic usage of the voice assistant
 if you choose to write a wrapper over this library.
 """
 
-from localtalk import VoiceAssistant, AppConfig
+from localtalk import AppConfig, VoiceAssistant
 
 
 def main():

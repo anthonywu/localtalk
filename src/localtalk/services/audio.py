@@ -17,15 +17,16 @@ class AudioService:
     def __init__(self, config: AudioConfig, console: Console | None = None):
         self.config = config
         self.console = console or Console()
-        
+
         # Import sounddevice here with error handling
         try:
             import sounddevice as sd
+
             self.sd = sd
         except ImportError as e:
             self.console.print(f"[red]❌ Failed to import sounddevice: {e}")
             self.console.print("[yellow]Try running: uv pip install sounddevice")
-            raise SystemExit(1)
+            raise SystemExit(1)  # noqa: B904
         self._check_audio_devices()
 
     def _check_audio_devices(self):

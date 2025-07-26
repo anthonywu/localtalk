@@ -29,7 +29,10 @@ class MLXLanguageModelService:
             self.console.print("[yellow]Other platforms may have limited functionality or performance.")
 
         self.console.print(f"[cyan]Loading MLX model: {self.config.model}")
-        with self.console.status("Loading model - if using model for the first time. This step may take a while but will only happen one time.", spinner="dots"):
+        with self.console.status(
+            "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
+            spinner="dots",
+        ):
             try:
                 from mlx_vlm import generate, load
                 from mlx_vlm.prompt_utils import apply_chat_template
@@ -50,7 +53,7 @@ class MLXLanguageModelService:
                     self.console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
                 else:
                     self.console.print("[yellow]Try running: uv pip install mlx-vlm")
-                raise SystemExit(1)
+                raise SystemExit(1)  # noqa: B904
         self.console.print("[green]Model loaded successfully!")
 
     def _get_session_history(self, session_id: str) -> list[dict]:
@@ -61,14 +64,14 @@ class MLXLanguageModelService:
 
     def _save_audio_to_temp_file(self, audio_array: np.ndarray, sample_rate: int) -> str:
         """Save audio array to a temporary WAV file.
-        
+
         Args:
             audio_array: Audio data as numpy array
             sample_rate: Sample rate of the audio
-            
+
         Returns:
             Path to the temporary audio file
-            
+
         Raises:
             ValueError: If audio array is invalid
             OSError: If unable to write file
@@ -96,7 +99,13 @@ class MLXLanguageModelService:
             self.console.print(f"[red]Error saving audio to temp file: {e}")
             raise OSError(f"Failed to save audio to temporary file: {e}") from e
 
-    def generate_response(self, text: str, session_id: str = "default", audio_array: np.ndarray | None = None, sample_rate: int | None = None) -> str:
+    def generate_response(
+        self,
+        text: str,
+        session_id: str = "default",
+        audio_array: np.ndarray | None = None,
+        sample_rate: int | None = None,
+    ) -> str:
         """Generate a response to the input text and/or audio.
 
         Args:
@@ -127,10 +136,7 @@ class MLXLanguageModelService:
 
             # Apply chat template with audio
             formatted_prompt = self.apply_chat_template(
-                self.processor,
-                self.config_obj if self.config_obj else self.model.config,
-                prompt,
-                num_audios=num_audios
+                self.processor, self.config_obj if self.config_obj else self.model.config, prompt, num_audios=num_audios
             )
 
             # Generate response with audio
@@ -146,7 +152,7 @@ class MLXLanguageModelService:
                     top_p=self.config.top_p,
                     repetition_penalty=self.config.repetition_penalty,
                     repetition_context_size=self.config.repetition_context_size,
-                    verbose=False
+                    verbose=False,
                 )
 
             # Extract text from output
@@ -168,11 +174,8 @@ class MLXLanguageModelService:
             conversation.append({"role": "user", "content": text})
 
             # Apply chat template if processor has this method
-            if hasattr(self.processor, 'apply_chat_template'):
-                prompt = self.processor.apply_chat_template(
-                    conversation,
-                    add_generation_prompt=True
-                )
+            if hasattr(self.processor, "apply_chat_template"):
+                prompt = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
             else:
                 # Fallback to simple prompt construction
                 prompt = f"{self.system_prompt}\n\n{text}"

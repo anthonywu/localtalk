@@ -1,8 +1,12 @@
 """Command-line interface for the Local Talk App."""
 
 import argparse
+import os
 import warnings
 from pathlib import Path
+
+# Disable Hugging Face telemetry to ensure complete offline/private capabiliity
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 # Suppress the pkg_resources deprecation warning from perth module
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
@@ -10,15 +14,13 @@ warnings.filterwarnings("ignore", message="pkg_resources is deprecated", categor
 # Suppress torch.backends.cuda.sdp_kernel deprecation warning
 warnings.filterwarnings("ignore", message="torch.backends.cuda.sdp_kernel\\(\\) is deprecated", category=FutureWarning)
 
-from localtalk.core.assistant import VoiceAssistant
-from localtalk.models.config import AppConfig
+from localtalk.core.assistant import VoiceAssistant  # noqa: E402
+from localtalk.models.config import AppConfig  # noqa: E402
 
 
 def parse_args():
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Local Voice Assistant with speech recognition, LLM, and TTS"
-    )
+    parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
 
     # Voice cloning (hidden for now - advanced/future workflow)
     # parser.add_argument(
@@ -46,19 +48,25 @@ def parse_args():
         "--model",
         type=str,
         default="mlx-community/gemma-3n-E2B-it-4bit",
-        help="MLX model from Hugging Face Hub (default: mlx-community/gemma-3n-E2B-it-4bit)",
+        help="MLX model from Huggingface Hub (default: mlx-community/gemma-3n-E2B-it-4bit)",
     )
     parser.add_argument(
         "--whisper-model",
         type=str,
         default="base.en",
         choices=[
-            "tiny", "tiny.en", 
-            "base", "base.en", 
-            "small", "small.en", 
-            "medium", "medium.en", 
-            "large", "large-v2", "large-v3",
-            "turbo"
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large",
+            "large-v2",
+            "large-v3",
+            "turbo",
         ],
         help="Whisper model size. English-only (.en) models perform better for English. Sizes: tiny (39M), base (74M), small (244M), medium (769M), large (1550M), turbo (798M, fast). Default: base.en",
     )
@@ -126,7 +134,7 @@ def parse_args():
             "mlx-community/Kokoro-82M-4bit",
             "mlx-community/Kokoro-82M-6bit",
             "mlx-community/Kokoro-82M-8bit",
-            "mlx-community/Kokoro-82M-bf16"
+            "mlx-community/Kokoro-82M-bf16",
         ],
         help="Kokoro model to use (default: 82M-4bit for fastest speed)",
     )
@@ -148,7 +156,7 @@ def parse_args():
         action="store_true",
         help="Disable TTS and use text-only mode",
     )
-    
+
     # Performance monitoring
     parser.add_argument(
         "--stats",
@@ -201,7 +209,7 @@ def main():
     config.kokoro.model = args.kokoro_model
     config.kokoro.voice = args.kokoro_voice
     config.kokoro.speed = args.kokoro_speed
-    
+
     # Enable stats if requested
     config.show_stats = args.stats
 
@@ -209,6 +217,7 @@ def main():
     if args.use_chatterbox:
         from rich.console import Console
         from rich.panel import Panel
+
         console = Console()
 
         warning_text = """[bold red]⚠️  EXPERIMENTAL FEATURE WARNING[/bold red]
@@ -227,8 +236,14 @@ For production use, we recommend the default native audio workflow.[/dim]"""
 
         # Prompt for confirmation
         try:
-            response = console.input("\n[bold yellow]Do you want to continue with ChatterBox TTS anyway? (yes/N):[/bold yellow] ").strip().lower()
-            if response not in ['yes', 'y']:
+            response = (
+                console.input(
+                    "\n[bold yellow]Do you want to continue with ChatterBox TTS anyway? (yes/N):[/bold yellow] "
+                )
+                .strip()
+                .lower()
+            )
+            if response not in ["yes", "y"]:
                 console.print("\n[green]Good choice! Switching to recommended native audio mode.[/green]")
                 # Handled by tts_backend selection
             else:

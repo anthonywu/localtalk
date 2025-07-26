@@ -2,8 +2,11 @@
 
 import threading
 import time
+from datetime import datetime
 
 from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
 
 from localtalk.models.config import AppConfig
 from localtalk.services.audio import AudioService
@@ -20,6 +23,9 @@ class VoiceAssistant:
         self.response_count = 0
         # Remove deprecated use_chatterbox - use tts_backend instead
 
+        # Enhance system prompt with current datetime context
+        self._enhance_system_prompt()
+
         # Initialize services
         self._init_services()
 
@@ -27,107 +33,151 @@ class VoiceAssistant:
         if self.config.chatterbox.save_voice_samples and self.config.tts_backend == "chatterbox":
             self.config.chatterbox.voice_output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _enhance_system_prompt(self):
+        """Enhance system prompt with current datetime and context."""
+        # Get current datetime
+        now = datetime.now()
+        datetime_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
+
+        # Create the enhanced prompt with datetime context
+        datetime_context = f"\n\nCurrent date and time: {datetime_str}"
+
+        # If the system prompt doesn't already have datetime info, add it
+        if (
+            "current date" not in self.config.system_prompt.lower()
+            and "current time" not in self.config.system_prompt.lower()
+        ):
+            self.config.system_prompt = self.config.system_prompt + datetime_context
+            self.console.print(f"[dim]System prompt enhanced with datetime: {datetime_str}[/dim]")
+
     def _init_services(self):
         """Initialize all services."""
-        self.console.print("[cyan]🤖 Initializing Local Voice Assistant...")
-        self.console.print("[cyan]━" * 50)
+        # Collect initialization messages
+        init_messages = []
 
-        # Speech recognition
-        self.stt = SpeechRecognitionService(self.config.whisper, self.console)
+        # Temporarily suppress individual service prints
+        from rich.console import Console
 
-        # Language model with audio support
-        self.llm = MLXLanguageModelService(
-            self.config.mlx_lm,
-            self.config.system_prompt,
-            self.console
-        )
+        quiet_console = Console(quiet=True)
 
-        # Text-to-speech setup based on backend
-        self.tts = None
-        self.adjust_tts_parameters = None
+        # Function to create/update the panel
+        def create_panel():
+            return Panel(
+                "\n".join(init_messages) if init_messages else "Starting initialization...",
+                title="🤖 Initializing Local Voice Assistant",
+                style="cyan",
+                expand=False,
+            )
 
-        if self.config.tts_backend == "chatterbox":
+        # Use Live display for progressive updates
+        with Live(create_panel(), refresh_per_second=4, console=self.console) as live:
+            # Speech recognition
+            init_messages.append(f"👂 Loading Whisper speech-to-text model: {self.config.whisper.model_size}")
+            live.update(create_panel())
+            self.stt = SpeechRecognitionService(self.config.whisper, quiet_console)
+
+            # Language model with audio support
+            init_messages.append(f"🤖 Loading LLM: {self.config.mlx_lm.model}")
+            live.update(create_panel())
+            self.llm = MLXLanguageModelService(self.config.mlx_lm, self.config.system_prompt, quiet_console)
+            live.update(create_panel())
+
+            # Text-to-speech setup based on backend
+            self.tts = None
+            self.adjust_tts_parameters = None
+
+            if self.config.tts_backend == "chatterbox":
+                try:
+                    if self.config.chatterbox.fast_mode:
+                        from localtalk.services.text_to_speech_fast import FastTextToSpeechService
+                        from localtalk.utils.emotion import adjust_tts_parameters
+
+                        self.tts = FastTextToSpeechService(self.config.chatterbox, quiet_console)
+                        self.adjust_tts_parameters = adjust_tts_parameters
+                        init_messages.append("ChatterBox TTS enabled (fast mode)")
+                        live.update(create_panel())
+                    else:
+                        from localtalk.services.text_to_speech import TextToSpeechService
+                        from localtalk.utils.emotion import adjust_tts_parameters
+
+                        self.tts = TextToSpeechService(self.config.chatterbox, quiet_console)
+                        self.adjust_tts_parameters = adjust_tts_parameters
+                        init_messages.append("ChatterBox TTS enabled (quality mode)")
+                        live.update(create_panel())
+                except ImportError as e:
+                    self.console.print(f"[red]❌ ChatterBox TTS import failed: {e}")
+                    self.console.print("[red]Cannot continue without requested TTS backend.")
+                    self.console.print("[yellow]Try running: uv pip install -e '.[chatterbox]'")
+                    raise SystemExit(1)  # noqa: B904
+
+            if self.config.tts_backend == "kokoro":
+                try:
+                    # Apply compatibility patches before importing
+                    import localtalk.utils.mlx_compat  # noqa: F401
+                    from localtalk.services.kokoro_tts import KokoroTTSService
+
+                    self.tts = KokoroTTSService(self.config.kokoro, quiet_console)
+                    live.update(create_panel())
+                    init_messages.append(f"🗣️ Kokoro text-to-speech enabled ({self.config.kokoro.model})")
+                    init_messages.append(
+                        f"  Kokoro Voice: {self.config.kokoro.voice}, Speed: {self.config.kokoro.speed}x"
+                    )
+                    live.update(create_panel())
+                except ImportError as e:  # noqa: B904
+                    self.console.print(f"[red]❌ Kokoro TTS import failed: {e}")
+                    self.console.print("[red]Cannot continue without TTS backend.")
+                    self.console.print("[yellow]Try running: uv pip install mlx-audio")
+                    raise SystemExit(1)  # noqa: B904
+                except Exception as e:  # noqa: B904
+                    self.console.print(f"[red]❌ Kokoro TTS initialization failed: {e}")
+                    self.console.print("[red]Cannot continue without TTS backend.")
+                    raise SystemExit(1)  # noqa: B904
+            elif self.config.tts_backend == "none":
+                init_messages.append("Text-only mode (no TTS)")
+                init_messages.append("Using native Gemma3 audio workflow")
+                live.update(create_panel())
+
+            # Audio I/O
+            live.update(create_panel())
+            self.audio = AudioService(self.config.audio, quiet_console)
+
+            # Get audio device info
             try:
-                if self.config.chatterbox.fast_mode:
-                    from localtalk.services.text_to_speech_fast import FastTextToSpeechService
-                    from localtalk.utils.emotion import adjust_tts_parameters
-                    self.tts = FastTextToSpeechService(self.config.chatterbox, self.console)
-                    self.adjust_tts_parameters = adjust_tts_parameters
-                    self.console.print("[green]ChatterBox TTS enabled (fast mode)")
-                else:
-                    from localtalk.services.text_to_speech import TextToSpeechService
-                    from localtalk.utils.emotion import adjust_tts_parameters
-                    self.tts = TextToSpeechService(self.config.chatterbox, self.console)
-                    self.adjust_tts_parameters = adjust_tts_parameters
-                    self.console.print("[green]ChatterBox TTS enabled (quality mode)")
-            except ImportError as e:
-                self.console.print(f"[red]❌ ChatterBox TTS import failed: {e}")
-                self.console.print("[red]Cannot continue without requested TTS backend.")
-                self.console.print("[yellow]Try running: uv pip install -e '.[chatterbox]'")
-                raise SystemExit(1)
+                import sounddevice as sd
 
-        if self.config.tts_backend == "kokoro":
-            try:
-                # Apply compatibility patches before importing
-                import localtalk.utils.mlx_compat
-                from localtalk.services.kokoro_tts import KokoroTTSService
-                self.tts = KokoroTTSService(self.config.kokoro, self.console)
-                self.console.print(f"[green]✅ Kokoro TTS enabled ({self.config.kokoro.model})")
-                self.console.print(f"[green]   Voice: {self.config.kokoro.voice}, Speed: {self.config.kokoro.speed}x")
-            except ImportError as e:
-                self.console.print(f"[red]❌ Kokoro TTS import failed: {e}")
-                self.console.print("[red]Cannot continue without TTS backend.")
-                self.console.print("[yellow]Try running: uv pip install mlx-audio")
-                raise SystemExit(1)
-            except Exception as e:
-                self.console.print(f"[red]❌ Kokoro TTS initialization failed: {e}")
-                self.console.print("[red]Cannot continue without TTS backend.")
-                raise SystemExit(1)
-        elif self.config.tts_backend == "none":
-            self.console.print("[cyan]Text-only mode (no TTS)")
+                devices = sd.query_devices()
+                default_input = sd.default.device[0]
+                default_output = sd.default.device[1]
+                if isinstance(default_input, int) and default_input < len(devices):
+                    init_messages.append(f"🎙️ Input device: {devices[default_input]['name']}")
+                if isinstance(default_output, int) and default_output < len(devices):
+                    init_messages.append(f"🔉 Output device: {devices[default_output]['name']}")
+                live.update(create_panel())
+            except:  # noqa: E722
+                pass
 
-        # For native Gemma3 audio workflow
-        if self.config.tts_backend == "none":
-            self.console.print("[cyan]Using native Gemma3 audio workflow")
+            # Final update with all information
+            init_messages.append("\n✓ All services initialized successfully!")
+            live.update(create_panel())
 
-        # Audio I/O
-        self.audio = AudioService(self.config.audio, self.console)
-
-        self._print_config()
         self._print_privacy_banner()
-
-    def _print_config(self):
-        """Print current configuration."""
-        # TTS Configuration
-        if self.config.tts_backend == "chatterbox":
-            if self.config.chatterbox.voice_sample_path:
-                self.console.print(f"[green]Voice cloning: {self.config.chatterbox.voice_sample_path}")
-            else:
-                self.console.print("[yellow]Voice cloning: Not configured (using default voice)")
-            self.console.print(f"[blue]Emotion exaggeration: {self.config.chatterbox.exaggeration}")
-            self.console.print(f"[blue]CFG weight: {self.config.chatterbox.cfg_weight}")
-        elif self.config.tts_backend == "kokoro":
-            self.console.print(f"[cyan]TTS: Kokoro ({self.config.kokoro.model})")
-            self.console.print(f"[blue]Voice: {self.config.kokoro.voice}, Speed: {self.config.kokoro.speed}x")
-        elif self.config.tts_backend == "none":
-            self.console.print("[cyan]Audio mode: Native Gemma3 audio processing (no TTS)")
-
-        self.console.print(f"[blue]LLM model: {self.config.mlx_lm.model}")
-        self.console.print(f"[blue]Whisper model: {self.config.whisper.model_size}")
-        self.console.print("[cyan]━" * 50)
 
     def _print_privacy_banner(self):
         """Print privacy information banner."""
-        self.console.print("\n[green]━" * 50)
-        self.console.print("[green bold]🔒 PRIVACY MODE READY")
-        self.console.print("[green]━" * 50)
-        self.console.print("[green]✅ All models loaded successfully!")
-        self.console.print("[green]✅ Everything runs 100% locally on your Mac")
-        self.console.print("[green]✅ No tracking, no telemetry, no cloud APIs")
-        self.console.print("\n[yellow]💡 TIP: For complete peace of mind, you can now")
-        self.console.print("[yellow]   disable your WiFi - LocalTalk will continue")
-        self.console.print("[yellow]   working perfectly offline!")
-        self.console.print("[green]━" * 50)
+        privacy_content = [
+            "✅ All models loaded successfully!",
+            "✅ Everything runs 100% locally on your Mac",
+            "✅ No tracking, no telemetry, no cloud APIs",
+            "✅ huggingface.co model hub's telemetry disabled (HF_HUB_DISABLE_TELEMETRY=1)",
+            "",
+            "[yellow]📵💡 TIP: For complete peace of mind, you can now",
+            "[yellow]   disable your WiFi - LocalTalk will continue",
+            "[yellow]   working perfectly offline!",
+        ]
+
+        privacy_panel = Panel("\n".join(privacy_content), title="🔒 PRIVACY MODE READY", style="green", expand=False)
+        self.console.print("\n")
+        self.console.print(privacy_panel)
 
     def process_voice_input(self) -> bool:
         """Process a single voice interaction.
@@ -151,9 +201,9 @@ class VoiceAssistant:
                     # Generate response from text
                     if self.config.show_stats:
                         llm_start = time.time()
-                    
+
                     response = self.llm.generate_response(user_input, self.config.session_id)
-                    
+
                     if self.config.show_stats:
                         llm_time = time.time() - llm_start
                         self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
@@ -161,7 +211,7 @@ class VoiceAssistant:
                     # Synthesize speech response
                     if self.config.show_stats:
                         tts_start = time.time()
-                    
+
                     if self.config.tts_backend == "kokoro":
                         # Kokoro TTS
                         sample_rate, audio_array = self.tts.synthesize_long_form(response)
@@ -175,19 +225,15 @@ class VoiceAssistant:
                         else:
                             # Adjust TTS parameters based on emotion
                             exaggeration, cfg_weight = self.adjust_tts_parameters(
-                                response,
-                                self.config.chatterbox.exaggeration,
-                                self.config.chatterbox.cfg_weight
+                                response, self.config.chatterbox.exaggeration, self.config.chatterbox.cfg_weight
                             )
-                            self.console.print(
-                                f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]"
-                            )
+                            self.console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
                             sample_rate, audio_array = self.tts.synthesize_long_form(
                                 response,
                                 exaggeration=exaggeration,
                                 cfg_weight=cfg_weight,
                             )
-                    
+
                     if self.config.show_stats:
                         tts_time = time.time() - tts_start
                         self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
@@ -199,8 +245,7 @@ class VoiceAssistant:
                     if self.config.chatterbox.save_voice_samples:
                         self.response_count += 1
                         output_path = (
-                            self.config.chatterbox.voice_output_dir /
-                            f"response_{self.response_count:03d}.wav"
+                            self.config.chatterbox.voice_output_dir / f"response_{self.response_count:03d}.wav"
                         )
                         self.tts.save_voice_sample(response, output_path)
 
@@ -210,14 +255,16 @@ class VoiceAssistant:
                     # Native Gemma3 audio workflow - text input but no TTS configured
                     if self.config.show_stats:
                         llm_start = time.time()
-                    
+
                     response = self.llm.generate_response(user_input, self.config.session_id)
-                    
+
                     if self.config.show_stats:
                         llm_time = time.time() - llm_start
                         self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
-                    
-                    self.console.print("[dim]Note: TTS is disabled. Use --no-tts to explicitly disable, or check if TTS backend failed to load.[/dim]")
+
+                    self.console.print(
+                        "[dim]Note: TTS is disabled. Use --no-tts to explicitly disable, or check if TTS backend failed to load.[/dim]"
+                    )
 
                 return True
 
@@ -227,8 +274,7 @@ class VoiceAssistant:
             # Record audio
             stop_event = threading.Event()
             recording_thread = threading.Thread(
-                target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)),
-                daemon=True
+                target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)), daemon=True
             )
             recording_thread.start()
 
@@ -240,7 +286,7 @@ class VoiceAssistant:
             # Get recorded audio
             audio_data = getattr(self, "_recorded_audio", None)
             if audio_data is None or audio_data.size == 0:
-                self.console.print("[red]No audio recorded. Please check your microphone.")
+                self.console.print("[yellow]No audio recorded. Please speak clearly and try again.")
                 return True
 
             # Use TTS workflow or native audio based on configuration
@@ -249,15 +295,15 @@ class VoiceAssistant:
                 # Need to transcribe first for text-based LLM
                 if self.config.show_stats:
                     stt_start = time.time()
-                
+
                 text = self.stt.transcribe(audio_data)
-                
+
                 if self.config.show_stats:
                     stt_time = time.time() - stt_start
                     self.console.print(f"[dim]📊 STT: {stt_time:.2f}s[/dim]")
-                
-                if not text:
-                    self.console.print("[yellow]No speech detected.")
+
+                if not text or not text.strip():
+                    self.console.print("[yellow]No speech detected. Please speak clearly and try again.")
                     return True
 
                 self.console.print(f"[green]You: {text}")
@@ -265,9 +311,9 @@ class VoiceAssistant:
                 # Generate response
                 if self.config.show_stats:
                     llm_start = time.time()
-                
+
                 response = self.llm.generate_response(text, self.config.session_id)
-                
+
                 if self.config.show_stats:
                     llm_time = time.time() - llm_start
                     self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
@@ -275,18 +321,14 @@ class VoiceAssistant:
                 # Adjust TTS parameters based on emotion (ChatterBox only)
                 if self.config.tts_backend == "chatterbox" and self.adjust_tts_parameters:
                     exaggeration, cfg_weight = self.adjust_tts_parameters(
-                        response,
-                        self.config.chatterbox.exaggeration,
-                        self.config.chatterbox.cfg_weight
+                        response, self.config.chatterbox.exaggeration, self.config.chatterbox.cfg_weight
                     )
-                    self.console.print(
-                        f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]"
-                    )
+                    self.console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
 
                 # Synthesize speech based on TTS backend
                 if self.config.show_stats:
                     tts_start = time.time()
-                
+
                 if self.config.tts_backend == "kokoro":
                     # Kokoro TTS
                     sample_rate, audio_array = self.tts.synthesize_long_form(response)
@@ -305,7 +347,7 @@ class VoiceAssistant:
                             exaggeration=exaggeration,
                             cfg_weight=cfg_weight,
                         )
-                
+
                 if self.config.show_stats:
                     tts_time = time.time() - tts_start
                     self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
@@ -316,10 +358,7 @@ class VoiceAssistant:
                 # Save voice sample if configured
                 if self.config.chatterbox.save_voice_samples:
                     self.response_count += 1
-                    output_path = (
-                        self.config.chatterbox.voice_output_dir /
-                        f"response_{self.response_count:03d}.wav"
-                    )
+                    output_path = self.config.chatterbox.voice_output_dir / f"response_{self.response_count:03d}.wav"
                     self.tts.save_voice_sample(response, output_path)
 
                 # Play response
@@ -335,21 +374,23 @@ class VoiceAssistant:
                 # Generate response with audio input
                 if self.config.show_stats:
                     llm_start = time.time()
-                
+
                 response = self.llm.generate_response(
                     prompt_text,
                     self.config.session_id,
                     audio_array=audio_data,
-                    sample_rate=self.config.audio.sample_rate
+                    sample_rate=self.config.audio.sample_rate,
                 )
-                
+
                 if self.config.show_stats:
                     llm_time = time.time() - llm_start
                     self.console.print(f"[dim]📊 LLM (with audio): {llm_time:.2f}s[/dim]")
 
                 # The Gemma3 model processes audio input and generates text responses
                 # Audio output generation is not currently supported by mlx-vlm
-                self.console.print("[dim]Note: Gemma3 processes audio input directly but generates text responses.[/dim]")
+                self.console.print(
+                    "[dim]Note: Gemma3 processes audio input directly but generates text responses.[/dim]"
+                )
 
             return True
 
@@ -358,6 +399,7 @@ class VoiceAssistant:
         except Exception as e:
             self.console.print(f"[red]Error: {e}")
             import traceback
+
             traceback.print_exc()
             return True
 

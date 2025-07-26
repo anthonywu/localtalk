@@ -1,6 +1,12 @@
-# Local Talk App
+# 💻🎤🔊 localtalk
 
 A privacy-first voice assistant that runs entirely offline on Apple Silicon, perfect for travelers, privacy-conscious users, and anyone who values their data sovereignty. No accounts, no cloud services, no tracking - just powerful AI that respects your privacy.
+
+Currently, this library needs immediate work in the following areas before I can recommend usage.
+
+- Develop a "System Prompt" with various personas
+- Augment with local system knowledge (date/time, username, etc)
+- 
 
 ## Why This Project Exists
 
@@ -48,15 +54,19 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - MLX framework (installed automatically)
 
 **Platform Support:**
-- macOS (Apple Silicon): ✅ Fully supported
-- Linux: 🚧 Planned (see roadmap below)
-- Windows: ⏳ Under consideration
+
+- macOS (Apple Silicon): ✅ Fully supported as first class platform.
+- Linux / CUDA backend: 🚧 Planned (see roadmap below).
+- Windows: 🤷🏼‍♂️ Would consider, but not seriously.
 
 ## Installation - with uv
 
+Recommended: install the CLI as a [`uv tool`](https://docs.astral.sh/uv/concepts/tools/)
+
 ```bash
 uv tool install localtalk
-# or
+
+# uvx also works, nice demo one-liner
 uvx localtalk
 ```
 
@@ -138,7 +148,7 @@ localtalk --use-chatterbox
 ### Command-Line Arguments
 
 **Primary AI Model Options:**
-- `--model NAME`: MLX model from Hugging Face Hub (default: mlx-community/gemma-3n-E2B-it-4bit)
+- `--model NAME`: MLX model from Huggingface Hub (default: mlx-community/gemma-3n-E2B-it-4bit)
 - `--whisper-model SIZE`: Whisper model size (default: base.en)
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)

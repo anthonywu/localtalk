@@ -78,7 +78,7 @@ class TextToSpeechService:
         import transformers
 
         # Store the original LlamaModel
-        if not hasattr(transformers, '_original_LlamaModel'):
+        if not hasattr(transformers, "_original_LlamaModel"):
             transformers._original_LlamaModel = transformers.LlamaModel
 
             # Create a patched version
@@ -101,7 +101,7 @@ class TextToSpeechService:
         tqdm.disable = True
 
         # Alternative: redirect tqdm to null
-        os.environ['TQDM_DISABLE'] = '1'
+        os.environ["TQDM_DISABLE"] = "1"
 
     def synthesize(
         self,
