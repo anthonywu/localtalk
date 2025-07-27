@@ -81,7 +81,7 @@ cd localtalk
 2. **Create a virtual environment** (using `uv` recommended):
 ```bash
 uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 ```
 
 3. **Install the package**:
@@ -129,6 +129,7 @@ localtalk
 
 ### Different TTS Backends
 
+
 ```bash
 # Fast mode (default) - Kokoro TTS with audio output
 localtalk
@@ -138,7 +139,12 @@ localtalk --kokoro-voice af_nova --kokoro-speed 1.2
 
 # Different Kokoro voices: Engish female "bella"
 localtalk --kokoro-voice bf_bella --kokoro-speed 1.2
+```
 
+To use ChatterBox TTS, you need to opt in to additional dependencies:
+`uv tool install localtalk[chatterbox]`
+
+```bash
 # High-quality mode - ChatterBox TTS (experimental, slow)
 localtalk --use-chatterbox
 ```

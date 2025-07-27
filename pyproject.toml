@@ -1,6 +1,6 @@
 [project]
 name = "localtalk"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,16 @@ authors = [
     {name = "Anthony Wu", email = "pls-file-gh-issue@users.noreply.github.com"}
 ]
 license = {text = "MIT"}
-keywords = ["voice-assistant", "tts", "speech-recognition", "llm", "offline", "apple-silicon", "privacy", "local"]
+keywords = [
+  "apple-silicon",
+  "llm",
+  "local",
+  "offline",
+  "privacy",
+  "speech-recognition",
+  "tts",
+  "voice-assistant",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,6 +35,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "en-core-web-sm>=3.8.0",  # spacy model
     "mlx>=0.27.1",
     "mlx-audio>=0.2.3",
     "mlx-lm>=0.26.1",
