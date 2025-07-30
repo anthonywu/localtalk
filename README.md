@@ -6,7 +6,8 @@ Currently, this library needs immediate work in the following areas before I can
 
 - Develop a "System Prompt" with various personas
 - Augment with local system knowledge (date/time, username, etc)
-- 
+
+Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
 
 ## Why This Project Exists
 
@@ -37,6 +38,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 ## Features
 
 - 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
+- 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD
 - 🤖 **Native Audio Processing**: Gemma3 model with direct audio understanding
 - 🚀 **Fast TTS**: MLX-Audio Kokoro for near real-time speech synthesis
 - 🔊 **Multiple TTS Options**: Choose between fast Kokoro or high-quality ChatterBox
@@ -113,6 +115,7 @@ This will:
 2. Use the `mlx-community/gemma-3n-E2B-it-4bit` model
 3. Enable dual-modal input (type or speak)
 4. Use `base.en` Whisper model for speech recognition
+5. Enable Voice Activity Detection (VAD) for automatic speech detection
 
 ### Complete Hello World Example
 
@@ -120,11 +123,30 @@ This will:
 # 1. Run the voice assistant
 localtalk
 
-# 2. You'll see: "💬 Type your message or press Enter to record audio:"
+# 2. You'll see: "💬 Type your message or press Enter for auto-listening (VAD will detect speech):"
 # 3. Either:
 #    - Type "Hello, how are you?" and press Enter
-#    - OR press Enter, speak, then press Enter again
+#    - OR press Enter and start speaking (VAD will automatically detect when you start and stop)
 # 4. Listen to the AI's response with fast Kokoro TTS!
+```
+
+### Voice Activity Detection (VAD) Modes
+
+LocalTalk now includes Silero VAD for intelligent speech detection:
+
+```bash
+# Default: Auto-listening mode (press Enter, then speak - VAD detects start/stop)
+localtalk
+
+# Manual VAD mode (press Enter to start, VAD detects when you stop)
+localtalk --vad-manual
+
+# Disable VAD (classic mode: press Enter to start, press Enter to stop)
+localtalk --no-vad
+
+# Adjust VAD sensitivity (0.0-1.0, default: 0.5)
+localtalk --vad-threshold 0.3  # More sensitive
+localtalk --vad-threshold 0.7  # Less sensitive
 ```
 
 ### Different TTS Backends
@@ -159,6 +181,12 @@ localtalk --use-chatterbox
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)
 - `--max-tokens INT`: Maximum tokens to generate (default: 100)
+
+**Voice Activity Detection (VAD) Options:**
+- `--no-vad`: Disable VAD (use manual recording with Enter key)
+- `--vad-manual`: Manual start with VAD (press Enter to start, auto-stop on silence)
+- `--vad-threshold FLOAT`: VAD sensitivity (0.0-1.0, default: 0.5)
+- `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
 
 **TTS Options:**
 - `--kokoro-model`: Choose Kokoro model (4bit/6bit/8bit/bf16, default: 4bit)
@@ -252,6 +280,18 @@ localtalk --system-prompt "You are a pirate. Respond in pirate speak, matey!"
    - Ensure the sample has minimal background noise
    - Try adjusting exaggeration and cfg-weight parameters
 
+5. **VAD not detecting speech**:
+   - Check microphone levels (speak clearly and at normal volume)
+   - Adjust VAD threshold: `--vad-threshold 0.3` for more sensitivity
+   - Ensure no background noise is interfering
+   - Try disabling VAD with `--no-vad` to test if microphone works
+
+6. **Whisper transcription hanging**:
+   - Try using a smaller model: `--whisper-model tiny.en`
+   - Check if audio files in `./output/` directory play correctly
+   - Ensure you have sufficient CPU/RAM available
+   - The first transcription may be slower due to model initialization
+
 ## Development
 
 ### Running Tests
@@ -315,7 +355,6 @@ This will enable LocalTalk to provide informed responses about current events, t
 
 - **Real-time streaming**: Stream responses as they're generated
 - **Multi-turn conversations**: Better context management for longer discussions
-- **Voice activity detection**: Automatic recording start/stop
 - **Custom wake words**: "Hey LocalTalk" activation
 - **Model hot-swapping**: Switch between models without restarting
 - **Voice profiles**: Save and switch between different voice configurations

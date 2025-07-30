@@ -47,6 +47,7 @@ voices/
 *.m4a
 .cache/
 whisper_models/
+output/
 
 # Testing
 .coverage

@@ -85,11 +85,27 @@ class MLXLanguageModelService:
             # Convert to float32 for compatibility
             audio_array = audio_array.astype(np.float32)
 
-        # Normalize if needed
+        # Process audio for better quality
         if audio_array.dtype in [np.float32, np.float64]:
+            # Remove DC offset
+            audio_array = audio_array - np.mean(audio_array)
+
+            # Calculate RMS
+            rms = np.sqrt(np.mean(audio_array**2))
+
+            # If audio is too quiet, amplify it
+            if rms < 0.02:  # Less aggressive threshold
+                self.console.print(f"[yellow]Audio quiet (RMS={rms:.4f}), amplifying...[/yellow]")
+                # Target RMS of 0.1 (reasonable level)
+                if rms > 0:
+                    target_rms = 0.1
+                    audio_array = audio_array * (target_rms / rms)
+
+            # Normalize to prevent clipping
             max_val = np.abs(audio_array).max()
-            if max_val > 1.0:
-                audio_array = audio_array / max_val
+            if max_val > 0.95:  # Leave some headroom
+                self.console.print(f"[yellow]Normalizing audio (max={max_val:.3f})[/yellow]")
+                audio_array = audio_array * (0.95 / max_val)
 
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -123,15 +139,29 @@ class MLXLanguageModelService:
         # Handle audio input if provided
         audio_files = []
         if audio_array is not None and sample_rate is not None:
+            # Debug audio input
+            self.console.print("[yellow]Audio input debug:[/yellow]")
+            self.console.print(f"  Shape: {audio_array.shape}")
+            self.console.print(f"  Dtype: {audio_array.dtype}")
+            self.console.print(f"  Sample rate: {sample_rate}")
+            self.console.print(f"  Duration: {len(audio_array) / sample_rate:.2f}s")
+            self.console.print(f"  Range: [{audio_array.min():.3f}, {audio_array.max():.3f}]")
+            self.console.print(f"  RMS: {np.sqrt(np.mean(audio_array**2)):.3f}")
+
             # Save audio to temporary file
             audio_path = self._save_audio_to_temp_file(audio_array, sample_rate)
             audio_files = [audio_path]
-            self.console.print("[cyan]Processing audio input...")
+            self.console.print(f"[cyan]Saved audio to: {audio_path}")
 
         # If we have audio, use the audio workflow as shown in the example
         if audio_files:
-            # Following the example pattern exactly
-            prompt = text  # Use the text as the prompt
+            # Following the mlx-vlm audio pattern
+            # For audio input, use a more specific prompt
+            if text == "Listen to this audio and respond conversationally to what you hear.":
+                # Try different prompts that might work better
+                prompt = "Transcribe this audio and respond to what the person is saying."
+            else:
+                prompt = text
             num_audios = len(audio_files)
 
             # Apply chat template with audio
@@ -141,6 +171,7 @@ class MLXLanguageModelService:
 
             # Generate response with audio
             self.console.print("[cyan]Generating response with audio input...")
+
             with self.console.status("Processing...", spinner="dots"):
                 output = self.generate(
                     self.model,
@@ -152,7 +183,7 @@ class MLXLanguageModelService:
                     top_p=self.config.top_p,
                     repetition_penalty=self.config.repetition_penalty,
                     repetition_context_size=self.config.repetition_context_size,
-                    verbose=False,
+                    verbose=False,  # Turn off verbose for cleaner output
                 )
 
             # Extract text from output

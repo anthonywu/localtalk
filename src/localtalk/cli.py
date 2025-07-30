@@ -164,6 +164,27 @@ def parse_args():
         help="Show timing statistics for STT, LLM, and TTS steps",
     )
 
+    # VAD options
+    parser.add_argument(
+        "--vad-mode",
+        choices=["auto", "manual", "off"],
+        default="auto",
+        help="Voice Activity Detection mode: auto (automatic start/stop), manual (press Enter to start, auto-stop), off (press Enter to start/stop)",
+    )
+    parser.add_argument(
+        "--vad-threshold",
+        type=float,
+        default=0.5,
+        help="VAD probability threshold for speech detection (0.0-1.0, default: 0.5)",
+    )
+    parser.add_argument(
+        "--vad-min-speech-ms",
+        type=int,
+        default=250,
+        help="Minimum speech duration in milliseconds (default: 250)",
+    )
+    
+
     return parser.parse_args()
 
 
@@ -212,6 +233,21 @@ def main():
 
     # Enable stats if requested
     config.show_stats = args.stats
+
+    # Handle VAD configuration with --vad-mode flag
+    if args.vad_mode == "auto":
+        config.audio.use_vad = True
+        config.audio.vad_auto_start = True
+    elif args.vad_mode == "manual":
+        config.audio.use_vad = True
+        config.audio.vad_auto_start = False
+    elif args.vad_mode == "off":
+        config.audio.use_vad = False
+        config.audio.vad_auto_start = False
+    
+    # Apply VAD threshold and timing settings
+    config.audio.vad_threshold = args.vad_threshold
+    config.audio.vad_min_speech_duration_ms = args.vad_min_speech_ms
 
     # Show experimental warning for ChatterBox mode
     if args.use_chatterbox:
