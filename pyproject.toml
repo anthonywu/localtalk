@@ -1,6 +1,6 @@
 [project]
 name = "localtalk"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,13 +42,17 @@ dependencies = [
     "mlx-vlm>=0.3.2",
     "misaki[en,ja,ko,zh]>=0.9.4",
     "numpy>=2.0,<2.3.0",  # restricted by opencv-python
+    "onnxruntime>=1.16.1",
     "openai-whisper>=20250625",
     "pydantic>=2.0.0",
     "pip>25",  # kokoro pipeline downloads uses this, anti-pattern but we'll deal with it for now
     "rich>=14.0.0",
+    "silero-vad>=5.1.2",
     "sounddevice>=0.5",
     "soundfile>=0.13",
-    "transformers>=4.54.0",
+    "torch>=2.7.0",
+    "torchaudio>=2.7.0",
+    "transformers>=4.54.0",  # transformers version that supports Gemma 3n (>= 4.53)
 ]
 
 [project.optional-dependencies]

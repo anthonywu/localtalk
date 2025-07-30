@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 
 import numpy as np
+import torch
 from rich.console import Console
 
 from localtalk.models.config import AudioConfig
@@ -27,6 +28,13 @@ class AudioService:
             self.console.print(f"[red]❌ Failed to import sounddevice: {e}")
             self.console.print("[yellow]Try running: uv pip install sounddevice")
             raise SystemExit(1)  # noqa: B904
+
+        # Initialize VAD if enabled
+        self.vad_model = None
+        self.vad_iterator = None
+        if self.config.use_vad:
+            self._init_vad()
+
         self._check_audio_devices()
 
     def _check_audio_devices(self):
@@ -52,6 +60,23 @@ class AudioService:
 
         except Exception as e:
             self.console.print(f"[yellow]Could not query audio devices: {e}")
+
+    def _init_vad(self):
+        """Initialize Silero VAD model."""
+        from silero_vad import VADIterator, load_silero_vad
+
+        self.console.print("[dim]Loading Silero VAD model...[/dim]")
+        # Load the model - let it fail if there's an issue
+        self.vad_model = load_silero_vad(onnx=True)
+        self.VADIterator = VADIterator
+
+        self.console.print("[dim]✓ VAD model loaded[/dim]")
+
+        # Test the model with supported chunk size (512 samples for 16kHz)
+        test_input = torch.zeros(512)
+        with torch.no_grad():
+            test_prob = self.vad_model(test_input, 16000).item()
+        self.console.print(f"[dim]✓ VAD test successful (test prob: {test_prob:.3f})[/dim]")
 
     def record_audio(self, stop_event: threading.Event) -> np.ndarray:
         """Record audio until stop event is set.
@@ -194,3 +219,31 @@ class AudioService:
         # Combine chunks
         audio_array = np.concatenate(chunks)
         return audio_array
+
+    def record_with_vad_auto(self) -> np.ndarray:
+        """Record audio automatically using VAD - starts immediately, no user input needed."""
+        if not self.config.use_vad:
+            raise RuntimeError("VAD is disabled but record_with_vad_auto was called")
+        if self.vad_model is None:
+            raise RuntimeError("VAD model is not loaded")
+
+        from localtalk.services.audio_vad_auto import record_with_vad_automatic
+
+        return record_with_vad_automatic(self)
+
+    def record_with_vad(self) -> np.ndarray:
+        """Record audio using Voice Activity Detection with manual start.
+
+        Press Enter to start recording, VAD will detect when you stop speaking.
+
+        Returns:
+            Recorded speech as numpy array
+        """
+        if not self.config.use_vad:
+            raise RuntimeError("VAD is disabled but record_with_vad was called")
+        if self.vad_model is None:
+            raise RuntimeError("VAD model is not loaded")
+
+        # For now, just use the automatic VAD recording
+        # In the future, we could implement a manual-start variant
+        return self.record_with_vad_auto()

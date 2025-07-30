@@ -33,6 +33,50 @@ class VoiceAssistant:
         if self.config.chatterbox.save_voice_samples and self.config.tts_backend == "chatterbox":
             self.config.chatterbox.voice_output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _display_banner(self):
+        """Display the LocalTalk ASCII banner."""
+        from pathlib import Path
+
+        from rich.text import Text
+
+        # Load banner from file
+        banner_path = Path(__file__).parent.parent / "assets" / "banner.txt"
+        try:
+            with open(banner_path, encoding="utf-8") as f:
+                banner_text = f.read().rstrip()
+
+            # Create styled banner
+            banner = Text(banner_text, style="bright_cyan bold")
+
+            # Print with some spacing (left-aligned)
+            self.console.print("\n")
+            self.console.print(banner)
+            self.console.print("\n")
+
+            # Add tagline
+            tagline = Text("🎙️ Private, Local Voice Assistant 🤖", style="cyan")
+            self.console.print(tagline)
+
+            alpha_warning = Text("🐣 Alpha Software - not ready for general use. 🐣", style="cyan")
+            self.console.print(alpha_warning)
+
+            # Add version info
+            import pkg_resources
+
+            try:
+                version = pkg_resources.get_distribution("local-talk-app").version
+                version_text = Text(f"v{version}", style="dim")
+            except Exception:
+                version_text = Text("v0.1.0-dev", style="dim")
+
+            self.console.print(version_text)
+            self.console.print("\n")
+
+        except FileNotFoundError:
+            # Fallback if banner file is missing
+            self.console.print("\n[bright_cyan bold]LOCALTALK[/bright_cyan bold]")
+            self.console.print("[cyan]Your Private, Local Voice Assistant[/cyan]\n")
+
     def _enhance_system_prompt(self):
         """Enhance system prompt with current datetime and context."""
         # Get current datetime
@@ -52,6 +96,9 @@ class VoiceAssistant:
 
     def _init_services(self):
         """Initialize all services."""
+        # Display banner first
+        self._display_banner()
+
         # Collect initialization messages
         init_messages = []
 
@@ -138,8 +185,18 @@ class VoiceAssistant:
                 live.update(create_panel())
 
             # Audio I/O
+            init_messages.append("🎤 Initializing audio service...")
             live.update(create_panel())
             self.audio = AudioService(self.config.audio, quiet_console)
+
+            # Check VAD status
+            if self.config.audio.use_vad:
+                if self.audio.vad_model is not None:
+                    init_messages.append("✓ Voice Activity Detection (VAD) enabled")
+                else:
+                    init_messages.append("⚠️  VAD failed to load, using fallback silence detection")
+            else:
+                init_messages.append("Voice Activity Detection disabled")
 
             # Get audio device info
             try:
@@ -187,9 +244,23 @@ class VoiceAssistant:
         """
         try:
             # Dual-modal input prompt
-            user_input = self.console.input(
-                "\n[cyan]💬 Type your message or press Enter to record audio: [/cyan]"
-            ).strip()
+            # Show appropriate prompt based on VAD setting
+            if self.config.audio.use_vad and self.config.audio.vad_auto_start:
+                prompt = (
+                    "\n[cyan]💬 Type your message or press Enter for auto-listening (VAD will detect speech): [/cyan]"
+                )
+            elif self.config.audio.use_vad:
+                prompt = "\n[cyan]💬 Type your message or press Enter to start listening (VAD enabled): [/cyan]"
+            else:
+                prompt = "\n[cyan]💬 Type your message or press Enter to record audio: [/cyan]"
+
+            user_input = self.console.input(prompt).strip()
+
+            # IMPORTANT: Clear any buffered input and ensure console is ready for Live display
+            import sys
+
+            sys.stdout.flush()
+            sys.stderr.flush()
 
             # Check if user typed something
             if user_input:
@@ -269,22 +340,39 @@ class VoiceAssistant:
                 return True
 
             # Voice input mode - user pressed Enter without typing
-            self.console.print("[cyan]🎤 Recording... Press Enter to stop.")
+            self.console.print("[dim]Starting voice input mode...[/dim]")
 
-            # Record audio
-            stop_event = threading.Event()
-            recording_thread = threading.Thread(
-                target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)), daemon=True
-            )
-            recording_thread.start()
+            # Small delay to ensure console is ready for Live display
+            time.sleep(0.1)
 
-            # Wait for user to stop recording
-            input()
-            stop_event.set()
-            recording_thread.join()
+            # Use VAD or traditional recording based on config
+            if self.config.audio.use_vad and self.config.audio.vad_auto_start:
+                # Use fully automatic VAD-based recording
+                audio_data = self.audio.record_with_vad_auto()
+                self.console.print(
+                    f"[cyan]✓ VAD recording complete: {len(audio_data) if audio_data is not None else 0} samples[/cyan]"
+                )
+            elif self.config.audio.use_vad:
+                # Use manual-start VAD recording (press Enter, then auto-stop on silence)
+                audio_data = self.audio.record_with_vad()
+            else:
+                # Traditional recording with manual stop
+                self.console.print("[cyan]🎤 Recording... Press Enter to stop.")
 
-            # Get recorded audio
-            audio_data = getattr(self, "_recorded_audio", None)
+                # Record audio
+                stop_event = threading.Event()
+                recording_thread = threading.Thread(
+                    target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)), daemon=True
+                )
+                recording_thread.start()
+
+                # Wait for user to stop recording
+                input()
+                stop_event.set()
+                recording_thread.join()
+
+                # Get recorded audio
+                audio_data = getattr(self, "_recorded_audio", None)
             if audio_data is None or audio_data.size == 0:
                 self.console.print("[yellow]No audio recorded. Please speak clearly and try again.")
                 return True
@@ -293,10 +381,27 @@ class VoiceAssistant:
             if self.tts and self.config.tts_backend != "none":
                 # Traditional workflow: transcribe → LLM → TTS
                 # Need to transcribe first for text-based LLM
+                self.console.print(f"[cyan]Transcribing audio... ({len(audio_data) / 16000:.1f}s @ 16kHz)[/cyan]")
+                # Force flush to ensure message is displayed
+                import sys
+
+                sys.stdout.flush()
+
                 if self.config.show_stats:
                     stt_start = time.time()
 
-                text = self.stt.transcribe(audio_data)
+                try:
+                    text = self.stt.transcribe(audio_data)
+
+                except TimeoutError:
+                    self.console.print("[red]Transcription timed out. This might be due to:[/red]")
+                    self.console.print("[yellow]- Audio too quiet or noisy[/yellow]")
+                    self.console.print("[yellow]- System resources constrained[/yellow]")
+                    self.console.print("[yellow]- Whisper model issue[/yellow]")
+                    return True
+                except Exception as e:
+                    self.console.print(f"[red]Transcription error: {e}[/red]")
+                    return True
 
                 if self.config.show_stats:
                     stt_time = time.time() - stt_start
@@ -405,6 +510,7 @@ class VoiceAssistant:
 
     def run(self):
         """Run the voice assistant main loop."""
+
         self.console.print("[cyan]Press Ctrl+C to exit.\n")
 
         try:
