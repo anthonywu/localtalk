@@ -1,6 +1,6 @@
 [project]
 name = "localtalk"
-version = "0.1.0-alpha.4"
+version = "0.2.0"
 description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,29 +35,31 @@ classifiers = [
 ]
 
 dependencies = [
-    "en-core-web-sm>=3.8.0",  # spacy model
+    # "en-core-web-sm>=3.8.0",  # spacy model
+    "hf-transfer>=0.1.9",
+    "huggingface-hub>=0.36.0,<1.0",
     "mlx>=0.27.1",
     "mlx-audio>=0.2.3",
     "mlx-lm>=0.26.1",
     "mlx-vlm>=0.3.2",
     "misaki[en,ja,ko,zh]>=0.9.4",
-    "numpy>=2.0,<2.3.0",  # restricted by opencv-python
+    "numpy>=2.0,<2.3.0", # restricted by opencv-python
     "onnxruntime>=1.16.1",
     "openai-whisper>=20250625",
     "pydantic>=2.0.0",
-    "pip>25",  # kokoro pipeline downloads uses this, anti-pattern but we'll deal with it for now
+    "pip>25", # kokoro pipeline downloads uses this, anti-pattern but we'll deal with it for now
     "rich>=14.0.0",
     "silero-vad>=5.1.2",
     "sounddevice>=0.5",
     "soundfile>=0.13",
     "torch>=2.7.0",
     "torchaudio>=2.7.0",
-    "transformers>=4.54.0",  # transformers version that supports Gemma 3n (>= 4.53)
+    "transformers>=4.54.0", # transformers version that supports Gemma 3n (>= 4.53)
 ]
 
 [project.optional-dependencies]
 chatterbox = [
-    "chatterbox-tts>=0.1.0",
+    "chatterbox-tts @ git+ssh://git@github.com/anthonywu/chatterbox.git@allow-dep-updates",
     "nltk>=3.9.1",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
