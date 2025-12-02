@@ -58,8 +58,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Note: chatterbox extra requires manual installation:
+#   pip install "chatterbox-tts @ git+https://github.com/anthonywu/chatterbox.git@allow-dep-updates"
 chatterbox = [
-    "chatterbox-tts @ git+ssh://git@github.com/anthonywu/chatterbox.git@allow-dep-updates",
     "nltk>=3.9.1",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
