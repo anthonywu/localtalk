@@ -23,7 +23,7 @@ We deliberately chose not to use macOS's built-in `say` command for text-to-spee
 
 Apple's newer [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) offers much higher quality voices that could be a great fit for this project. However, we're waiting for proper Python library support to integrate it. Once Python bindings become available, we'll add support for these modern Apple voices as another local TTS option.
 
-Built with speech recognition (Whisper), language model processing (Gemma3/MLX), and text-to-speech synthesis (Kokoro/ChatterBox), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
+Built with speech recognition (Whisper), language model processing (Gemma3/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
 
 ## Why "LocalTalk"?
 
@@ -40,10 +40,8 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
 - 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD
 - 🤖 **Native Audio Processing**: Gemma3 model with direct audio understanding
-- 🚀 **Fast TTS**: MLX-Audio Kokoro for near real-time speech synthesis
-- 🔊 **Multiple TTS Options**: Choose between fast Kokoro or high-quality ChatterBox
+- 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 💬 **Dual Input Modes**: Type or speak your queries
-- 🎭 **Voice Options**: Multiple voice personalities with Kokoro
 - 💾 **Fully Offline**: No internet connection required after setup
 - 🔒 **100% Private**: Your conversations never leave your device
 
@@ -54,6 +52,19 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - macOS with Apple Silicon (M1/M2/M3)
 - Microphone for voice input
 - MLX framework (installed automatically)
+- System dependency for audio processing (libsndfile)
+
+### macOS System Dependencies
+
+The TTS engine requires `libsndfile`. Install via Nix (recommended) or Homebrew:
+
+```bash
+# Using Nix (recommended)
+nix-env -iA nixpkgs.libsndfile
+
+# Or using Homebrew
+brew install libsndfile
+```
 
 **Platform Support:**
 
@@ -111,8 +122,8 @@ localtalk
 ```
 
 This will:
-1. Start with fast Kokoro TTS (MLX-Audio)
-2. Use the `mlx-community/gemma-3n-E2B-it-4bit` model
+1. Start with ChatterBox Turbo TTS
+2. Use the `lmstudio-community/gpt-oss-20b-MLX-8bit` model
 3. Enable dual-modal input (type or speak)
 4. Use `base.en` Whisper model for speech recognition
 5. Enable Voice Activity Detection (VAD) for automatic speech detection
@@ -127,7 +138,7 @@ localtalk
 # 3. Either:
 #    - Type "Hello, how are you?" and press Enter
 #    - OR press Enter and start speaking (VAD will automatically detect when you start and stop)
-# 4. Listen to the AI's response with fast Kokoro TTS!
+# 4. Listen to the AI's response with ChatterBox Turbo TTS!
 ```
 
 ### Voice Activity Detection (VAD) Modes
@@ -149,26 +160,14 @@ localtalk --vad-threshold 0.3  # More sensitive
 localtalk --vad-threshold 0.7  # Less sensitive
 ```
 
-### Different TTS Backends
-
+### TTS Configuration
 
 ```bash
-# Fast mode (default) - Kokoro TTS with audio output
+# Default: ChatterBox Turbo TTS
 localtalk
 
-# Different Kokoro voices: American female "nova"
-localtalk --kokoro-voice af_nova --kokoro-speed 1.2
-
-# Different Kokoro voices: Engish female "bella"
-localtalk --kokoro-voice bf_bella --kokoro-speed 1.2
-```
-
-To use ChatterBox TTS, you need to opt in to additional dependencies:
-`uv tool install localtalk[chatterbox]`
-
-```bash
-# High-quality mode - ChatterBox TTS (experimental, slow)
-localtalk --use-chatterbox
+# Disable TTS for text-only mode
+localtalk --no-tts
 ```
 
 ## Configuration Options
@@ -176,7 +175,7 @@ localtalk --use-chatterbox
 ### Command-Line Arguments
 
 **Primary AI Model Options:**
-- `--model NAME`: MLX model from Huggingface Hub (default: mlx-community/gemma-3n-E2B-it-4bit)
+- `--model NAME`: MLX model from Huggingface Hub (default: lmstudio-community/gpt-oss-20b-MLX-8bit)
 - `--whisper-model SIZE`: Whisper model size (default: base.en)
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)
@@ -189,32 +188,13 @@ localtalk --use-chatterbox
 - `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
 
 **TTS Options:**
-- `--kokoro-model`: Choose Kokoro model (4bit/6bit/8bit/bf16, default: 4bit)
-- `--kokoro-voice`: Voice personality (af_heart/af_nova/af_bella/bf_emma)
-- `--kokoro-speed`: Speech speed 0.5-2.0 (default: 1.0)
 - `--no-tts`: Disable TTS for text-only mode
-- `--use-chatterbox`: Use experimental ChatterBox TTS (slow but high quality)
-
-**ChatterBox Options (requires --use-chatterbox):**
-- `--exaggeration FLOAT`: Emotion intensity (0.0-1.0, default: 0.5)
-- `--cfg-weight FLOAT`: Pacing control (0.0-1.0, default: 0.5)
-- `--tts-quality`: Use quality mode instead of fast mode
 
 **Other Options:**
 - `--save-voice`: Save generated audio responses
 - `--system-prompt`: Custom system prompt for the LLM
 
 ### Example Configurations
-
-**Calm, professional assistant (ChatterBox)**:
-```bash
-localtalk --use-chatterbox --exaggeration 0.3 --cfg-weight 0.7 --temperature 0.5
-```
-
-**Expressive, dynamic assistant (ChatterBox)**:
-```bash
-localtalk --use-chatterbox --exaggeration 0.8 --cfg-weight 0.3 --temperature 0.9
-```
 
 **Using a different model**:
 ```bash
@@ -229,7 +209,7 @@ Everything runs locally on your Mac!
 
 - ✅ **Whisper**: Runs locally, no API key needed
 - ✅ **MLX-LM**: Runs locally on Apple Silicon, no API key needed
-- ✅ **ChatterBox**: Runs locally, no API key needed
+- ✅ **ChatterBox Turbo**: Runs locally, no API key needed
 
 ## Advanced Usage
 
@@ -243,7 +223,6 @@ from localtalk import VoiceAssistant, AppConfig
 # Create custom configuration
 config = AppConfig()
 config.mlx_lm.model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
-config.chatterbox.exaggeration = 0.7
 
 # Create and run assistant
 assistant = VoiceAssistant(config)
@@ -275,10 +254,9 @@ localtalk --system-prompt "You are a pirate. Respond in pirate speak, matey!"
    - Try using a smaller/quantized model
    - Close other applications to free up memory
 
-4. **Poor voice cloning quality**:
-   - Use a longer, clearer voice sample (10-30 seconds)
-   - Ensure the sample has minimal background noise
-   - Try adjusting exaggeration and cfg-weight parameters
+4. **Poor TTS quality**:
+   - Ensure the text is clear and well-punctuated
+   - Try shorter sentences for more natural prosody
 
 5. **VAD not detecting speech**:
    - Check microphone levels (speak clearly and at normal volume)
@@ -337,7 +315,7 @@ Currently, LocalTalk supports English (American and British accents). **Chinese 
 **Contributors welcome!** If you'd like to help add support for your language, please check our [Issues](https://github.com/anthonywu/localtalk/issues) page or submit a PR. Language additions mainly involve:
 - Configuring Whisper for the target language
 - Testing Gemma3's response quality in that language  
-- Setting up Kokoro TTS with appropriate voice models
+- Setting up ChatterBox TTS with appropriate voice models
 - Adding language-specific prompts and examples
 
 ### Offline Knowledge Base
