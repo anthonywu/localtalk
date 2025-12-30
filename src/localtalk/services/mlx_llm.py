@@ -212,6 +212,40 @@ class MLXLanguageModelService:
         
         # Remove any remaining message tags
         clean_response = clean_response.replace("<|channel|>", "").replace("<|message|>", "").replace("<|end|>", "").strip()
+        
+        # Remove chat template artifacts (prefixes added by chat template formatting)
+        # Different models use different assistant role prefixes: "Start, Assistant", "Assistant:", "<|assistant|>", etc.
+        # This regex extracts the actual content after common role indicator patterns
+        import re
+        
+        # Match and remove common chat template role markers and delimiters at the start and end
+        # Examples: "<|start|>", "Start, Assistant", "Assistant:", "<|assistant|>", "[ASST]", etc.
+        chat_template_patterns = [
+            r"^<\|start\|>\s*",  # "<|start|>"
+            r"^[Ss]tart,\s*[Aa]ssistant\s*:?\s*",  # "Start, Assistant" or "start, assistant"
+            r"^[Aa]ssistant\s*:?\s*",  # "Assistant:" or "Assistant"
+            r"^<\|assistant\|>\s*",  # "<|assistant|>"
+            r"^\[ASST\]\s*",  # "[ASST]"
+            r"^<assistant>\s*",  # "<assistant>"
+        ]
+        
+        for pattern in chat_template_patterns:
+            if re.match(pattern, clean_response):
+                clean_response = re.sub(pattern, "", clean_response).strip()
+                break  # Only remove one prefix
+        
+        # Also remove trailing chat template markers
+        end_markers = [
+            r"\s*<\|end\|>$",
+            r"\s*<\|return\|>$",
+            r"\s*\[/ASST\]$",
+            r"\s*</assistant>$",
+        ]
+        
+        for pattern in end_markers:
+            if re.search(pattern, clean_response):
+                clean_response = re.sub(pattern, "", clean_response).strip()
+                break
 
         # Update conversation history
         history.append({"role": "user", "content": text})
