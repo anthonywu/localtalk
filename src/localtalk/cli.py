@@ -75,6 +75,11 @@ def parse_args():
         type=str,
         help="Custom system prompt for the LLM",
     )
+    parser.add_argument(
+        "--system-prompt-file",
+        type=str,
+        help="Path to a text file containing a custom system prompt for the LLM",
+    )
 
     parser.add_argument(
         "--no-tts",
@@ -157,8 +162,24 @@ def main():
     config.mlx_lm.max_tokens = args.max_tokens
     config.whisper.model_size = args.whisper_model
 
-    # Update system prompt if provided
-    if args.system_prompt:
+    # Update system prompt - prioritize --system-prompt-file over --system-prompt
+    if args.system_prompt_file:
+        try:
+            with open(args.system_prompt_file, "r", encoding="utf-8") as f:
+                config.system_prompt = f.read().strip()
+        except FileNotFoundError:
+            from rich.console import Console
+
+            console = Console()
+            console.print(f"[red]Error: System prompt file not found: {args.system_prompt_file}[/red]")
+            return
+        except Exception as e:
+            from rich.console import Console
+
+            console = Console()
+            console.print(f"[red]Error reading system prompt file: {e}[/red]")
+            return
+    elif args.system_prompt:
         config.system_prompt = args.system_prompt
 
     # Set TTS backend
