@@ -25,8 +25,8 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="mlx-community/gemma-3n-E2B-it-4bit",
-        help="MLX model from Huggingface Hub (default: mlx-community/gemma-3n-E2B-it-4bit)",
+        default="lmstudio-community/gpt-oss-20b-MLX-8bit",
+        help="MLX model from Huggingface Hub (default: lmstudio-community/gpt-oss-20b-MLX-8bit)",
     )
     parser.add_argument(
         "--whisper-model",
