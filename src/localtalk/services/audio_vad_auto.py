@@ -1,15 +1,32 @@
 """Automatic VAD recording without any user input."""
 
 import time
+from collections import deque
 
 import numpy as np
 import torch
 from rich.live import Live
 from rich.table import Table
+from rich.text import Text
 
 # Constants
 MAX_RECORDING_DURATION_SECONDS = 120  # 2 minutes maximum recording
 CHUNK_SIZE = 512  # Samples per chunk (required by Silero VAD for 16kHz)
+WAVEFORM_WIDTH = 60  # Width of waveform display in characters
+WAVEFORM_HISTORY = 60  # Number of samples to show in waveform
+
+# Unicode block characters for waveform (from lowest to highest)
+WAVEFORM_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+
+def level_to_block(level: float) -> str:
+    """Convert audio level (0-1) to a waveform block character."""
+    # Clamp and scale
+    level = min(1.0, max(0.0, level))
+    # Apply some scaling to make quiet sounds more visible
+    level = level**0.5  # Square root for better visibility of quiet sounds
+    index = int(level * (len(WAVEFORM_BLOCKS) - 1))
+    return WAVEFORM_BLOCKS[index]
 
 
 def record_with_vad_automatic(audio_service) -> np.ndarray:
@@ -37,6 +54,9 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
     last_audio_level = 0.0
     last_vad_prob = 0.0
     chunk_count = 0
+
+    # Waveform history for visualization
+    level_history: deque[tuple[float, bool]] = deque(maxlen=WAVEFORM_HISTORY)  # (level, is_speech)
 
     # Speech detection parameters
     speech_chunks_threshold = 2  # Need 2 consecutive chunks to start
@@ -84,6 +104,10 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
         last_vad_prob = vad_prob
         vad_probabilities.append(vad_prob)
 
+        # Track for waveform visualization
+        is_speech = vad_prob > audio_service.config.vad_threshold
+        level_history.append((last_audio_level, is_speech))
+
         # Speech detection logic
         if vad_prob > audio_service.config.vad_threshold:
             consecutive_speech_chunks += 1
@@ -116,8 +140,35 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
             should_stop = True
             audio_service.console.print("[yellow]Maximum recording duration reached (2 minutes)[/yellow]")
 
+    def create_waveform() -> Text:
+        """Create a colorized waveform from level history."""
+        waveform = Text()
+
+        if not level_history:
+            # Empty waveform
+            waveform.append("▁" * WAVEFORM_WIDTH, style="dim")
+            return waveform
+
+        # Convert history to list for indexing
+        history_list = list(level_history)
+
+        for level, is_speech in history_list:
+            block = level_to_block(level)
+            if is_speech:
+                waveform.append(block, style="bold green")
+            elif level > 0.02:
+                waveform.append(block, style="yellow")
+            else:
+                waveform.append(block, style="dim")
+
+        # Pad if history is shorter than width
+        if len(history_list) < WAVEFORM_WIDTH:
+            waveform.append("▁" * (WAVEFORM_WIDTH - len(history_list)), style="dim")
+
+        return waveform
+
     def create_status_display():
-        """Create a status display showing VAD activity."""
+        """Create a status display showing VAD activity with waveform."""
         table = Table(show_header=False, box=None, padding=0)
 
         # Status line
@@ -128,32 +179,37 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
         else:
             table.add_row("[yellow]🤫 Processing...[/yellow]")
 
-        # Audio level indicator
-        level_bar_length = int(last_audio_level * 50)
-        level_bar = "█" * level_bar_length + "░" * (50 - level_bar_length)
-        table.add_row(f"Audio: [{level_bar}] {last_audio_level:.3f}")
+        # Waveform visualization
+        waveform = create_waveform()
+        waveform_row = Text()
+        waveform_row.append("    ")  # Indent
+        waveform_row.append_text(waveform)
+        table.add_row(waveform_row)
 
-        # VAD probability indicator
-        vad_bar_length = int(last_vad_prob * 50)
-        vad_color = "green" if last_vad_prob > audio_service.config.vad_threshold else "yellow"
-        vad_bar = "█" * vad_bar_length + "░" * (50 - vad_bar_length)
-        table.add_row(f"VAD:   [[{vad_color}]{vad_bar}[/{vad_color}]] {last_vad_prob:.3f}")
+        # Current level indicator (smaller, just shows current value)
+        level_indicator = "●" if last_vad_prob > audio_service.config.vad_threshold else "○"
+        level_color = "green" if last_vad_prob > audio_service.config.vad_threshold else "dim"
+        table.add_row(
+            f"    [{level_color}]{level_indicator}[/{level_color}] "
+            f"Level: {last_audio_level:.3f}  VAD: {last_vad_prob:.3f}"
+        )
 
         # Info
         if not has_spoken:
             wait_time = (max_initial_wait_chunks - chunk_count) * CHUNK_SIZE / audio_service.config.sample_rate
             if wait_time > 0:
-                table.add_row(f"[dim]Timeout in {wait_time:.1f}s[/dim]")
+                table.add_row(f"[dim]    Timeout in {wait_time:.1f}s[/dim]")
         else:
             # Show recording duration
             duration = chunk_count * CHUNK_SIZE / audio_service.config.sample_rate
             max_duration = max_recording_chunks * CHUNK_SIZE / audio_service.config.sample_rate
-            table.add_row(f"[dim]Recording: {duration:.1f}s / {max_duration:.0f}s max[/dim]")
+            table.add_row(f"[dim]    Recording: {duration:.1f}s / {max_duration:.0f}s max[/dim]")
 
         return table
 
     # Start recording immediately
-    audio_service.console.print("[cyan]VAD is listening for your speech...[/cyan]")
+    audio_service.console.print("[cyan]🎤 VAD is listening for your speech...[/cyan]")
+    audio_service.console.print("[dim]   Waveform: green=speech detected, yellow=audio, dim=silence[/dim]\n")
 
     # Force flush before starting Live
     import sys
@@ -161,9 +217,12 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
     sys.stdout.flush()
     sys.stderr.flush()
 
-    with Live(create_status_display(), refresh_per_second=10, console=audio_service.console, transient=True) as live:
-        # Don't print inside Live context - it interferes!
-
+    with Live(
+        create_status_display(),
+        refresh_per_second=15,
+        console=audio_service.console,
+        transient=False,  # Keep visible for debugging
+    ) as live:
         stream = audio_service.sd.InputStream(
             samplerate=audio_service.config.sample_rate,
             channels=audio_service.config.channels,
@@ -174,15 +233,13 @@ def record_with_vad_automatic(audio_service) -> np.ndarray:
 
         with stream:
             # Keep updating display until we should stop
-            loop_count = 0
             while not should_stop:
-                loop_count += 1
                 live.update(create_status_display())
-                time.sleep(0.05)  # Faster updates
+                time.sleep(0.05)  # ~20 updates per second
 
             # Final display update
             live.update(create_status_display())
-            time.sleep(0.2)  # Let last chunks process
+            time.sleep(0.1)
 
     # Live context closed, ensure console is clean
     sys.stdout.flush()

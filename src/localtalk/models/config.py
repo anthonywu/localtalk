@@ -65,37 +65,17 @@ class AudioConfig(BaseModel):
     vad_speech_pad_ms: int = Field(default=400, description="Speech padding in milliseconds")
 
 
-class KokoroConfig(BaseModel):
-    """Configuration for MLX-Audio Kokoro TTS."""
-
-    model: str = Field(default="mlx-community/Kokoro-82M-4bit", description="Kokoro model to use")
-    voice: str = Field(default="af_heart", description="Voice to use (af_heart, af_nova, af_bella, bf_emma)")
-    speed: float = Field(default=1.0, description="Speech speed (0.5-2.0)")
-    lang_code: str = Field(
-        default="a", description="Language code (a=American English, b=British, j=Japanese, z=Chinese)"
-    )
-    sample_rate: int = Field(default=24000, description="Audio sample rate")
-
-    @field_validator("speed")
-    @classmethod
-    def validate_speed(cls, v: float) -> float:
-        if not 0.5 <= v <= 2.0:
-            raise ValueError(f"Speed must be between 0.5 and 2.0, got {v}")
-        return v
-
-
 class AppConfig(BaseModel):
     """Main application configuration."""
 
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     mlx_lm: MLXLMConfig = Field(default_factory=MLXLMConfig)
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
-    kokoro: KokoroConfig = Field(default_factory=KokoroConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
         default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user.",
         description="System prompt for the LLM",
     )
-    tts_backend: str = Field(default="kokoro", description="TTS backend to use: 'kokoro', 'chatterbox', or 'none'")
+    tts_backend: str = Field(default="chatterbox", description="TTS backend to use: 'chatterbox' or 'none'")
     show_stats: bool = Field(default=False, description="Show timing statistics for STT, LLM, and TTS steps")
