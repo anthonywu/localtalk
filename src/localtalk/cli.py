@@ -25,8 +25,8 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="lmstudio-community/gpt-oss-20b-MLX-8bit",
-        help="MLX model from Huggingface Hub (default: lmstudio-community/gpt-oss-20b-MLX-8bit)",
+        default="mlx-community/gpt-oss-20b-MXFP4-Q8",
+        help="MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8)",
     )
     parser.add_argument(
         "--whisper-model",

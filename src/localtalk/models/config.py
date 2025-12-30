@@ -16,7 +16,7 @@ class WhisperConfig(BaseModel):
 class MLXLMConfig(BaseModel):
     """Configuration for MLX-LM language model."""
 
-    model: str = Field(default="lmstudio-community/gpt-oss-20b-MLX-8bit", description="MLX model from Hugging Face Hub")
+    model: str = Field(default="mlx-community/gpt-oss-20b-MXFP4-Q8", description="MLX model from Hugging Face Hub")
     temperature: float = Field(default=0.7, description="Temperature for text generation")
     max_tokens: int = Field(default=100, description="Maximum tokens to generate")
     top_p: float = Field(default=1.0, description="Top-p sampling parameter")

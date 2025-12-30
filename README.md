@@ -30,6 +30,7 @@ Built with speech recognition (Whisper), language model processing (Gemma3/MLX),
 The name "LocalTalk" is a playful homage to [Apple's classic LocalTalk networking protocol](https://en.wikipedia.org/wiki/LocalTalk) from the 1980s. Just as the original LocalTalk enabled local network communication between Apple devices without needing external infrastructure, our LocalTalk enables local AI conversations without needing external cloud services.
 
 The name works on two levels:
+
 - **Local**: Everything runs locally on your Mac - no internet required after initial setup
 - **Talk**: It's literally a talking app that listens and responds with voice
 
@@ -44,7 +45,6 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 💬 **Dual Input Modes**: Type or speak your queries
 - 💾 **Fully Offline**: No internet connection required after setup
 - 🔒 **100% Private**: Your conversations never leave your device
-
 
 ## Requirements
 
@@ -86,23 +86,27 @@ uvx localtalk
 ## Contributor/Developer Setup
 
 1. **Clone the repository**:
+
 ```bash
 git clone https://github.com/anthonywu/localtalk
 cd localtalk
 ```
 
 2. **Create a virtual environment** (using `uv` recommended):
+
 ```bash
 uv venv
 source .venv/bin/activate
 ```
 
 3. **Install the package**:
+
 ```bash
 uv pip install -e .
 ```
 
 4. **Download NLTK data** (required for sentence tokenization):
+
 ```bash
 python -c "import nltk; nltk.download('punkt')"
 ```
@@ -122,8 +126,9 @@ localtalk
 ```
 
 This will:
+
 1. Start with ChatterBox Turbo TTS
-2. Use the `lmstudio-community/gpt-oss-20b-MLX-8bit` model
+2. Use the `mlx-community/gpt-oss-20b-MXFP4-Q8` model
 3. Enable dual-modal input (type or speak)
 4. Use `base.en` Whisper model for speech recognition
 5. Enable Voice Activity Detection (VAD) for automatic speech detection
@@ -175,28 +180,33 @@ localtalk --no-tts
 ### Command-Line Arguments
 
 **Primary AI Model Options:**
-- `--model NAME`: MLX model from Huggingface Hub (default: lmstudio-community/gpt-oss-20b-MLX-8bit)
+
+- `--model NAME`: MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8)
 - `--whisper-model SIZE`: Whisper model size (default: base.en)
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)
 - `--max-tokens INT`: Maximum tokens to generate (default: 100)
 
 **Voice Activity Detection (VAD) Options:**
+
 - `--no-vad`: Disable VAD (use manual recording with Enter key)
 - `--vad-manual`: Manual start with VAD (press Enter to start, auto-stop on silence)
 - `--vad-threshold FLOAT`: VAD sensitivity (0.0-1.0, default: 0.5)
 - `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
 
 **TTS Options:**
+
 - `--no-tts`: Disable TTS for text-only mode
 
 **Other Options:**
+
 - `--save-voice`: Save generated audio responses
 - `--system-prompt`: Custom system prompt for the LLM
 
 ### Example Configurations
 
 **Using a different model**:
+
 ```bash
 localtalk --model mlx-community/Llama-3.2-3B-Instruct-4bit --whisper-model small.en
 ```
@@ -313,8 +323,9 @@ MIT License - see LICENSE file for details.
 Currently, LocalTalk supports English (American and British accents). **Chinese language support is coming next**, with other major world languages to follow. The underlying models (Whisper, Gemma3, and Kokoro) already have multilingual capabilities - we just need to wire up the language detection and configuration.
 
 **Contributors welcome!** If you'd like to help add support for your language, please check our [Issues](https://github.com/anthonywu/localtalk/issues) page or submit a PR. Language additions mainly involve:
+
 - Configuring Whisper for the target language
-- Testing Gemma3's response quality in that language  
+- Testing Gemma3's response quality in that language
 - Setting up ChatterBox TTS with appropriate voice models
 - Adding language-specific prompts and examples
 

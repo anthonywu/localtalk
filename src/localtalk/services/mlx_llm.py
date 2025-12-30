@@ -1,4 +1,4 @@
-"""Language model service using MLX-VLM with audio support."""
+"""Language model service using MLX-LM with audio support."""
 
 import platform
 import tempfile
@@ -12,7 +12,7 @@ from localtalk.models.config import MLXLMConfig
 
 
 class MLXLanguageModelService:
-    """Service for generating responses using MLX-VLM with audio support."""
+    """Service for generating responses using MLX-LM with audio support."""
 
     def __init__(self, config: MLXLMConfig, system_prompt: str, console: Console | None = None):
         self.config = config
@@ -28,33 +28,32 @@ class MLXLanguageModelService:
             self.console.print("[yellow]Warning: MLX is optimized for macOS with Apple Silicon.")
             self.console.print("[yellow]Other platforms may have limited functionality or performance.")
 
-        self.console.print(f"[cyan]Loading MLX model: {self.config.model}")
-        with self.console.status(
-            "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
-            spinner="dots",
-        ):
-            try:
-                from mlx_vlm import generate, load
-                from mlx_vlm.prompt_utils import apply_chat_template
-                from mlx_vlm.utils import load_config
+        try:
+            self.console.print(f"[cyan]Loading MLX model: {self.config.model}")
+            with self.console.status(
+                "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
+                spinner="dots",
+            ):
+                from mlx_lm import generate, load
 
                 self.generate = generate
-                self.apply_chat_template = apply_chat_template
-                self.load_config_func = load_config
-
-                self.model, self.processor = load(self.config.model)
+                self.model, self.tokenizer = load(self.config.model)
                 try:
                     self.config_obj = self.model.config
                 except AttributeError:
                     self.config_obj = None
-            except ImportError as e:
-                self.console.print(f"[red]❌ Failed to import MLX-VLM: {e}")
-                if platform.system() != "Darwin":
-                    self.console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
-                else:
-                    self.console.print("[yellow]Try running: uv pip install mlx-vlm")
-                raise SystemExit(1)  # noqa: B904
-        self.console.print("[green]Model loaded successfully!")
+            self.console.print("[green]Model loaded successfully!")
+        except (ImportError, Exception) as e:
+            # Always use the main console for critical errors
+            from rich.console import Console
+
+            error_console = Console()
+            error_console.print(f"[red]❌ Failed to load MLX-LM: {e}")
+            if platform.system() != "Darwin":
+                error_console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
+            else:
+                error_console.print("[yellow]Try running: uv pip install mlx-lm")
+            raise SystemExit(1)  # noqa: B904
 
     def _get_session_history(self, session_id: str) -> list[dict]:
         """Get or create chat history for a session."""
@@ -153,79 +152,47 @@ class MLXLanguageModelService:
             audio_files = [audio_path]
             self.console.print(f"[cyan]Saved audio to: {audio_path}")
 
-        # If we have audio, use the audio workflow as shown in the example
+        # Note: mlx-lm does not support audio input directly.
+        # For audio input, use text generation based on the provided text parameter
         if audio_files:
-            # Following the mlx-vlm audio pattern
-            # For audio input, use a more specific prompt
-            if text == "Listen to this audio and respond conversationally to what you hear.":
-                # Try different prompts that might work better
-                prompt = "Transcribe this audio and respond to what the person is saying."
-            else:
-                prompt = text
-            num_audios = len(audio_files)
+            # Audio input mode - use the text parameter as the prompt
+            self.console.print("[yellow]Audio input detected. Using text-based processing.")
+            if not text or text == "Listen to this audio and respond conversationally to what you hear.":
+                text = "Please process the audio input and respond."
 
-            # Apply chat template with audio
-            formatted_prompt = self.apply_chat_template(
-                self.processor, self.config_obj if self.config_obj else self.model.config, prompt, num_audios=num_audios
+        # Text-only mode
+        # Build conversation with system prompt
+        conversation = []
+
+        # Add system message if this is the first message
+        if not history:
+            conversation.append({"role": "system", "content": self.system_prompt})
+
+        # Add conversation history
+        conversation.extend(history)
+
+        # Add current user message
+        conversation.append({"role": "user", "content": text})
+
+        # Apply chat template if tokenizer has this method
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            prompt = self.tokenizer.apply_chat_template(conversation, add_generation_prompt=True)
+        else:
+            # Fallback to simple prompt construction
+            prompt = f"{self.system_prompt}\n\n{text}"
+
+        # Generate response
+        with self.console.status("Generating response...", spinner="dots"):
+            result = self.generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=self.config.max_tokens,
+                verbose=False,
             )
 
-            # Generate response with audio
-            self.console.print("[cyan]Generating response with audio input...")
-
-            with self.console.status("Processing...", spinner="dots"):
-                output = self.generate(
-                    self.model,
-                    self.processor,
-                    formatted_prompt,
-                    audio=audio_files,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
-                    top_p=self.config.top_p,
-                    repetition_penalty=self.config.repetition_penalty,
-                    repetition_context_size=self.config.repetition_context_size,
-                    verbose=False,  # Turn off verbose for cleaner output
-                )
-
-            # Extract text from output
-            response_text = output.text.strip()
-
-        else:
-            # Text-only mode
-            # Build conversation with system prompt
-            conversation = []
-
-            # Add system message if this is the first message
-            if not history:
-                conversation.append({"role": "system", "content": self.system_prompt})
-
-            # Add conversation history
-            conversation.extend(history)
-
-            # Add current user message
-            conversation.append({"role": "user", "content": text})
-
-            # Apply chat template if processor has this method
-            if hasattr(self.processor, "apply_chat_template"):
-                prompt = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
-            else:
-                # Fallback to simple prompt construction
-                prompt = f"{self.system_prompt}\n\n{text}"
-
-            # Generate response
-            with self.console.status("Generating response...", spinner="dots"):
-                result = self.generate(
-                    model=self.model,
-                    processor=self.processor,
-                    prompt=prompt,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
-                    top_p=self.config.top_p,
-                    repetition_penalty=self.config.repetition_penalty,
-                    repetition_context_size=self.config.repetition_context_size,
-                    verbose=False,
-                )
-
-            response_text = result.text.strip()
+        # mlx_lm.generate() returns a string directly
+        response_text = result.strip() if isinstance(result, str) else result.text.strip()
 
         # Clean up temporary audio files
         for audio_file in audio_files:
@@ -234,9 +201,21 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
+        # Extract only the final message content, removing thinking tags
+        # This prevents tokenizer errors when messages are re-passed through apply_chat_template
+        clean_response = response_text
+        if "<|message|>" in response_text and "<|end|>" in response_text:
+            # Extract only the final message after the last <|end|> tag
+            end_marker = response_text.rfind("<|end|>")
+            if end_marker != -1:
+                clean_response = response_text[end_marker + len("<|end|>"):].strip()
+        
+        # Remove any remaining message tags
+        clean_response = clean_response.replace("<|channel|>", "").replace("<|message|>", "").replace("<|end|>", "").strip()
+
         # Update conversation history
         history.append({"role": "user", "content": text})
-        history.append({"role": "assistant", "content": response_text})
+        history.append({"role": "assistant", "content": clean_response})
 
         # Keep only recent history (last 10 exchanges)
         if len(history) > 20:
@@ -244,8 +223,8 @@ class MLXLanguageModelService:
         else:
             self.chat_history[session_id] = history
 
-        self.console.print(f"[cyan]Assistant: {response_text}")
-        return response_text
+        self.console.print(f"[cyan]Assistant: {clean_response}")
+        return clean_response
 
     def clear_history(self, session_id: str = "default"):
         """Clear conversation history for a session."""
