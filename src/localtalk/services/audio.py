@@ -61,6 +61,168 @@ class AudioService:
         except Exception as e:
             self.console.print(f"[yellow]Could not query audio devices: {e}")
 
+    def test_microphone(self, duration_seconds: float = 5.0) -> bool:
+        """Test microphone input levels.
+
+        Records for the specified duration and displays real-time audio levels.
+        Returns True if audio was detected, False otherwise.
+        """
+        from collections import deque
+
+        from rich.live import Live
+        from rich.table import Table
+        from rich.text import Text
+
+        # Waveform constants
+        WAVEFORM_WIDTH = 60
+        WAVEFORM_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+        def level_to_block(level: float) -> str:
+            level = min(1.0, max(0.0, level))
+            level = level**0.5  # Square root for better visibility
+            index = int(level * (len(WAVEFORM_BLOCKS) - 1))
+            return WAVEFORM_BLOCKS[index]
+
+        self.console.print(f"\n[cyan]🎤 Testing microphone for {duration_seconds} seconds...[/cyan]")
+        self.console.print("[dim]Speak into your microphone to test audio levels.[/dim]\n")
+
+        # Get device info
+        try:
+            devices = self.sd.query_devices()
+            default_input = self.sd.default.device[0]
+            if default_input is not None and default_input < len(devices):
+                device_info = devices[default_input]
+                self.console.print(f"[cyan]Input device:[/cyan] {device_info['name']}")
+                self.console.print(f"[dim]  Sample rate: {device_info['default_samplerate']} Hz[/dim]")
+                self.console.print(f"[dim]  Channels: {device_info['max_input_channels']}[/dim]")
+                self.console.print()
+        except Exception as e:
+            self.console.print(f"[yellow]Could not get device info: {e}[/yellow]")
+
+        # Track audio levels
+        max_level = 0.0
+        current_level = 0.0
+        samples_with_audio = 0
+        total_samples = 0
+        level_history: deque[float] = deque(maxlen=WAVEFORM_WIDTH)
+
+        def audio_callback(indata, frames, time_info, status):
+            nonlocal current_level, max_level, samples_with_audio, total_samples
+            if status:
+                self.console.print(f"[red]Audio status: {status}[/red]")
+
+            # Calculate level
+            level = np.abs(indata).max()
+            current_level = float(level)
+            if level > max_level:
+                max_level = level
+            if level > 0.01:  # Threshold for "real" audio
+                samples_with_audio += 1
+            total_samples += 1
+            level_history.append(current_level)
+
+        def create_waveform() -> Text:
+            waveform = Text()
+            history_list = list(level_history)
+
+            for level in history_list:
+                block = level_to_block(level)
+                if level < 0.01:
+                    waveform.append(block, style="dim red")
+                elif level < 0.05:
+                    waveform.append(block, style="yellow")
+                elif level < 0.2:
+                    waveform.append(block, style="green")
+                else:
+                    waveform.append(block, style="bold bright_green")
+
+            # Pad if needed
+            if len(history_list) < WAVEFORM_WIDTH:
+                waveform.append("▁" * (WAVEFORM_WIDTH - len(history_list)), style="dim")
+
+            return waveform
+
+        def create_display():
+            table = Table(show_header=False, box=None, padding=0)
+
+            # Waveform
+            waveform = create_waveform()
+            waveform_row = Text()
+            waveform_row.append("    ")
+            waveform_row.append_text(waveform)
+            table.add_row(waveform_row)
+
+            # Status indicator
+            if current_level < 0.01:
+                indicator = "○"
+                color = "red"
+                status_text = "No signal"
+            elif current_level < 0.05:
+                indicator = "◐"
+                color = "yellow"
+                status_text = "Very quiet"
+            elif current_level < 0.2:
+                indicator = "●"
+                color = "green"
+                status_text = "Good"
+            else:
+                indicator = "●"
+                color = "bright_green"
+                status_text = "Strong"
+
+            table.add_row(
+                f"    [{color}]{indicator}[/{color}] Level: {current_level:.3f} ({status_text})  Peak: {max_level:.3f}"
+            )
+
+            return table
+
+        # Record and display
+        import sys
+
+        sys.stdout.flush()
+
+        num_samples = int(duration_seconds * self.config.sample_rate / self.config.chunk_size)
+
+        with Live(create_display(), refresh_per_second=15, console=self.console, transient=True) as live:
+            with self.sd.InputStream(
+                samplerate=self.config.sample_rate,
+                channels=self.config.channels,
+                dtype="float32",
+                callback=audio_callback,
+                blocksize=self.config.chunk_size,
+            ):
+                for _ in range(num_samples):
+                    live.update(create_display())
+                    time.sleep(self.config.chunk_size / self.config.sample_rate)
+
+        # Summary
+        self.console.print("\n[cyan]━━━ Microphone Test Results ━━━[/cyan]")
+        self.console.print(f"Peak level: {max_level:.3f}")
+
+        if total_samples > 0:
+            audio_percentage = (samples_with_audio / total_samples) * 100
+            self.console.print(f"Audio detected: {audio_percentage:.1f}% of samples")
+
+        # Diagnosis
+        if max_level < 0.01:
+            self.console.print("\n[red]❌ NO AUDIO DETECTED[/red]")
+            self.console.print("[yellow]Possible causes:[/yellow]")
+            self.console.print("  • Microphone not connected or muted")
+            self.console.print("  • Wrong input device selected")
+            self.console.print("  • App lacks microphone permission")
+            self.console.print("  • Check: System Settings > Privacy & Security > Microphone")
+            return False
+        elif max_level < 0.05:
+            self.console.print("\n[yellow]⚠️  VERY LOW AUDIO LEVELS[/yellow]")
+            self.console.print("[yellow]Suggestions:[/yellow]")
+            self.console.print("  • Speak louder or move closer to the microphone")
+            self.console.print("  • Check system input volume settings")
+            self.console.print("  • Try a different microphone")
+            return True
+        else:
+            self.console.print("\n[green]✓ Microphone is working properly![/green]")
+            return True
+
     def _init_vad(self):
         """Initialize Silero VAD model."""
         from silero_vad import VADIterator, load_silero_vad

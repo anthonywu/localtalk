@@ -1,9 +1,12 @@
 """Main voice assistant implementation."""
 
+import sys
 import threading
 import time
 from datetime import datetime
 
+import mistune
+from mistune.renderers.html import HTMLRenderer
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -14,24 +17,73 @@ from localtalk.services.mlx_llm import MLXLanguageModelService
 from localtalk.services.speech_recognition import SpeechRecognitionService
 
 
+class _PlainTextRenderer(HTMLRenderer):
+    """Renderer that strips markdown formatting, outputting plain text."""
+
+    def text(self, text):
+        return text
+
+    def emphasis(self, text):
+        return text
+
+    def strong(self, text):
+        return text
+
+    def link(self, text, **attrs):
+        return text
+
+    def image(self, text, **attrs):
+        return text or ""
+
+    def codespan(self, text):
+        return text
+
+    def linebreak(self):
+        return "\n"
+
+    def softbreak(self):
+        return " "
+
+    def paragraph(self, text):
+        return text + "\n\n"
+
+    def heading(self, text, level, **attrs):
+        return text + "\n"
+
+    def block_code(self, code, **attrs):
+        return code + "\n"
+
+    def block_quote(self, text):
+        return text
+
+    def list(self, text, ordered, **attrs):
+        return text
+
+    def list_item(self, text, **attrs):
+        return "• " + text + "\n" if text else ""
+
+    def thematic_break(self):
+        return "\n"
+
+
+def _strip_markdown(text: str) -> str:
+    """Strip markdown formatting from text, returning plain text."""
+    md = mistune.create_markdown(renderer=_PlainTextRenderer())
+    return md(text).strip()
+
+
 class VoiceAssistant:
     """Main voice assistant class that orchestrates all services."""
 
     def __init__(self, config: AppConfig | None = None):
         self.config = config or AppConfig()
         self.console = Console()
-        self.response_count = 0
-        # Remove deprecated use_chatterbox - use tts_backend instead
 
         # Enhance system prompt with current datetime context
         self._enhance_system_prompt()
 
         # Initialize services
         self._init_services()
-
-        # Create output directories if needed
-        if self.config.chatterbox.save_voice_samples and self.config.tts_backend == "chatterbox":
-            self.config.chatterbox.voice_output_dir.mkdir(parents=True, exist_ok=True)
 
     def _display_banner(self):
         """Display the LocalTalk ASCII banner."""
@@ -61,13 +113,13 @@ class VoiceAssistant:
             self.console.print(alpha_warning)
 
             # Add version info
-            import pkg_resources
+            from importlib.metadata import PackageNotFoundError, version
 
             try:
-                version = pkg_resources.get_distribution("local-talk-app").version
-                version_text = Text(f"v{version}", style="dim")
-            except Exception:
-                version_text = Text("v0.1.0-dev", style="dim")
+                ver = version("local-talk-app")
+                version_text = Text(f"v{ver}", style="dim")
+            except PackageNotFoundError:
+                version_text = Text("local-dev-version", style="dim")
 
             self.console.print(version_text)
             self.console.print("\n")
@@ -117,7 +169,7 @@ class VoiceAssistant:
             )
 
         # Use Live display for progressive updates
-        with Live(create_panel(), refresh_per_second=4, console=self.console) as live:
+        with Live(create_panel(), refresh_per_second=1, console=self.console) as live:
             # Speech recognition
             init_messages.append(f"👂 Loading Whisper speech-to-text model: {self.config.whisper.model_size}")
             live.update(create_panel())
@@ -131,57 +183,22 @@ class VoiceAssistant:
 
             # Text-to-speech setup based on backend
             self.tts = None
-            self.adjust_tts_parameters = None
 
             if self.config.tts_backend == "chatterbox":
                 try:
-                    if self.config.chatterbox.fast_mode:
-                        from localtalk.services.text_to_speech_fast import FastTextToSpeechService
-                        from localtalk.utils.emotion import adjust_tts_parameters
+                    from localtalk.services.mlx_tts import MLXTextToSpeechService
 
-                        self.tts = FastTextToSpeechService(self.config.chatterbox, quiet_console)
-                        self.adjust_tts_parameters = adjust_tts_parameters
-                        init_messages.append("ChatterBox TTS enabled (fast mode)")
-                        live.update(create_panel())
-                    else:
-                        from localtalk.services.text_to_speech import TextToSpeechService
-                        from localtalk.utils.emotion import adjust_tts_parameters
-
-                        self.tts = TextToSpeechService(self.config.chatterbox, quiet_console)
-                        self.adjust_tts_parameters = adjust_tts_parameters
-                        init_messages.append("ChatterBox TTS enabled (quality mode)")
-                        live.update(create_panel())
+                    self.tts = MLXTextToSpeechService(self.config.chatterbox, quiet_console)
+                    init_messages.append("🗣️ ChatterBox TTS enabled (MLX)")
+                    live.update(create_panel())
                 except ImportError as e:
                     self.console.print(f"[red]❌ ChatterBox TTS import failed: {e}")
                     self.console.print("[red]Cannot continue without requested TTS backend.")
-                    self.console.print("[yellow]Try running: uv pip install -e '.[chatterbox]'")
-                    raise SystemExit(1)  # noqa: B904
-
-            if self.config.tts_backend == "kokoro":
-                try:
-                    # Apply compatibility patches before importing
-                    import localtalk.utils.mlx_compat  # noqa: F401
-                    from localtalk.services.kokoro_tts import KokoroTTSService
-
-                    self.tts = KokoroTTSService(self.config.kokoro, quiet_console)
-                    live.update(create_panel())
-                    init_messages.append(f"🗣️ Kokoro text-to-speech enabled ({self.config.kokoro.model})")
-                    init_messages.append(
-                        f"  Kokoro Voice: {self.config.kokoro.voice}, Speed: {self.config.kokoro.speed}x"
-                    )
-                    live.update(create_panel())
-                except ImportError as e:  # noqa: B904
-                    self.console.print(f"[red]❌ Kokoro TTS import failed: {e}")
-                    self.console.print("[red]Cannot continue without TTS backend.")
                     self.console.print("[yellow]Try running: uv pip install mlx-audio")
                     raise SystemExit(1)  # noqa: B904
-                except Exception as e:  # noqa: B904
-                    self.console.print(f"[red]❌ Kokoro TTS initialization failed: {e}")
-                    self.console.print("[red]Cannot continue without TTS backend.")
-                    raise SystemExit(1)  # noqa: B904
-            elif self.config.tts_backend == "none":
-                init_messages.append("Text-only mode (no TTS)")
-                init_messages.append("Using native Gemma3 audio workflow")
+
+            if self.config.tts_backend == "none":
+                init_messages.append("🔇 Text-only mode (no TTS)")
                 live.update(create_panel())
 
             # Audio I/O
@@ -206,15 +223,19 @@ class VoiceAssistant:
                 default_input = sd.default.device[0]
                 default_output = sd.default.device[1]
                 if isinstance(default_input, int) and default_input < len(devices):
-                    init_messages.append(f"🎙️ Input device: {devices[default_input]['name']}")
+                    input_device = devices[default_input]
+                    init_messages.append(
+                        f"🎙️ Input: {input_device['name']} ({int(input_device['default_samplerate'])} Hz)"
+                    )
                 if isinstance(default_output, int) and default_output < len(devices):
-                    init_messages.append(f"🔉 Output device: {devices[default_output]['name']}")
+                    output_device = devices[default_output]
+                    init_messages.append(f"🔉 Output: {output_device['name']}")
                 live.update(create_panel())
             except:  # noqa: E722
                 pass
 
             # Final update with all information
-            init_messages.append("\n✓ All services initialized successfully!")
+            init_messages.append("\n✅ Ready!")
             live.update(create_panel())
 
         self._print_privacy_banner()
@@ -222,281 +243,221 @@ class VoiceAssistant:
     def _print_privacy_banner(self):
         """Print privacy information banner."""
         privacy_content = [
-            "✅ All models loaded successfully!",
             "✅ Everything runs 100% locally on your Mac",
             "✅ No tracking, no telemetry, no cloud APIs",
-            "✅ huggingface.co model hub's telemetry disabled (HF_HUB_DISABLE_TELEMETRY=1)",
             "",
-            "[yellow]📵💡 TIP: For complete peace of mind, you can now",
-            "[yellow]   disable your WiFi - LocalTalk will continue",
-            "[yellow]   working perfectly offline!",
+            "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            "[dim]💡 TIP: Disable progress bars with: export TQDM_DISABLE=1[/dim]",
         ]
 
-        privacy_panel = Panel("\n".join(privacy_content), title="🔒 PRIVACY MODE READY", style="green", expand=False)
+        privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
         self.console.print("\n")
         self.console.print(privacy_panel)
 
+        # Show current audio device prominently
+        self._print_audio_device_info()
+
+    def _print_audio_device_info(self):
+        """Print current audio device information."""
+        try:
+            import sounddevice as sd
+
+            devices = sd.query_devices()
+            default_input = sd.default.device[0]
+
+            if isinstance(default_input, int) and default_input < len(devices):
+                input_device = devices[default_input]
+                device_name = input_device["name"]
+                sample_rate = int(input_device["default_samplerate"])
+
+                self.console.print(f"\n[bold cyan]🎙️ Microphone:[/bold cyan] {device_name} ({sample_rate} Hz)")
+
+                # Warn if sample rate differs from expected 16kHz
+                if sample_rate != 16000:
+                    self.console.print("[dim]   (Audio will be resampled to 16kHz for VAD/Whisper)[/dim]")
+        except Exception:
+            pass
+
+    def _get_text_input(self) -> str | None:
+        """Get text input from user. Returns the input string or None if empty."""
+        prompt = "\n[cyan]💬 Type your message (Enter to go back to voice mode): [/cyan]"
+        user_input = self.console.input(prompt).strip()
+        return user_input if user_input else None
+
+    def _process_text_response(self, user_input: str) -> None:
+        """Generate and play response for text input."""
+        self.console.print(f"[green]You: {user_input}")
+
+        if self.tts:
+            if self.config.show_stats:
+                llm_start = time.time()
+
+            response = self.llm.generate_response(user_input, self.config.session_id)
+
+            if self.config.show_stats:
+                llm_time = time.time() - llm_start
+                self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
+
+            if self.config.show_stats:
+                tts_start = time.time()
+
+            tts_text = _strip_markdown(response)
+            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
+
+            if self.config.show_stats:
+                tts_time = time.time() - tts_start
+                self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
+                total_time = llm_time + tts_time
+                self.console.print(f"[dim]📊 Total: {total_time:.2f}s[/dim]")
+
+            self.audio.play_audio(audio_array, sample_rate)
+        else:
+            if self.config.show_stats:
+                llm_start = time.time()
+
+            response = self.llm.generate_response(user_input, self.config.session_id)
+
+            if self.config.show_stats:
+                llm_time = time.time() - llm_start
+                self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
+
+            self.console.print("[dim]Note: TTS is disabled.[/dim]")
+
+    def _process_voice_response(self, audio_data) -> None:
+        """Process recorded audio: transcribe, generate response, and play TTS."""
+        if self.tts and self.config.tts_backend != "none":
+            self.console.print(f"[cyan]Transcribing audio... ({len(audio_data) / 16000:.1f}s @ 16kHz)[/cyan]")
+            sys.stdout.flush()
+
+            if self.config.show_stats:
+                stt_start = time.time()
+
+            try:
+                text = self.stt.transcribe(audio_data)
+            except TimeoutError:
+                self.console.print("[red]Transcription timed out.[/red]")
+                return
+            except Exception as e:
+                self.console.print(f"[red]Transcription error: {e}[/red]")
+                return
+
+            if self.config.show_stats:
+                stt_time = time.time() - stt_start
+                self.console.print(f"[dim]📊 STT: {stt_time:.2f}s[/dim]")
+
+            if not text or not text.strip():
+                self.console.print("[yellow]No speech detected. Please speak clearly and try again.")
+                return
+
+            self.console.print(f"[green]You: {text}")
+
+            if self.config.show_stats:
+                llm_start = time.time()
+
+            response = self.llm.generate_response(text, self.config.session_id)
+
+            if self.config.show_stats:
+                llm_time = time.time() - llm_start
+                self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
+
+            if self.config.show_stats:
+                tts_start = time.time()
+
+            tts_text = _strip_markdown(response)
+            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
+
+            if self.config.show_stats:
+                tts_time = time.time() - tts_start
+                self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
+                total_time = stt_time + llm_time + tts_time
+                self.console.print(f"[dim]📊 Total: {total_time:.2f}s[/dim]")
+
+            self.audio.play_audio(audio_array, sample_rate)
+        else:
+            self.console.print("[cyan]Processing with native audio workflow...")
+            prompt_text = "Listen to this audio and respond conversationally to what you hear."
+
+            if self.config.show_stats:
+                llm_start = time.time()
+
+            response = self.llm.generate_response(
+                prompt_text,
+                self.config.session_id,
+                audio_array=audio_data,
+                sample_rate=self.config.audio.sample_rate,
+            )
+
+            if self.config.show_stats:
+                llm_time = time.time() - llm_start
+                self.console.print(f"[dim]📊 LLM (with audio): {llm_time:.2f}s[/dim]")
+
+            self.console.print("[dim]Note: Gemma3 processes audio input directly but generates text responses.[/dim]")
+
     def process_voice_input(self) -> bool:
         """Process a single voice interaction.
+
+        In auto-listen mode (default with VAD), starts listening immediately.
+        Press Esc during listening to switch to keyboard input mode.
 
         Returns:
             True to continue, False to exit
         """
         try:
-            # Dual-modal input prompt
-            # Show appropriate prompt based on VAD setting
+            # Auto-listening mode: VAD enabled with auto_start
             if self.config.audio.use_vad and self.config.audio.vad_auto_start:
-                prompt = (
-                    "\n[cyan]💬 Type your message or press Enter for auto-listening (VAD will detect speech): [/cyan]"
-                )
-            elif self.config.audio.use_vad:
-                prompt = "\n[cyan]💬 Type your message or press Enter to start listening (VAD enabled): [/cyan]"
+                self.console.print("\n[cyan]🎤 Listening... (press Esc for keyboard input)[/cyan]")
+                sys.stdout.flush()
+
+                audio_data = self.audio.record_with_vad_auto()
+
+                if audio_data is None or audio_data.size == 0:
+                    # No speech detected - offer text input
+                    self.console.print("[dim]No speech detected.[/dim]")
+                    user_input = self._get_text_input()
+                    if user_input:
+                        self._process_text_response(user_input)
+                    return True
+
+                self._process_voice_response(audio_data)
+                return True
+
+            # Legacy prompt-first mode
+            if self.config.audio.use_vad:
+                prompt = "\n[cyan]💬 Type message or Enter to listen (VAD enabled): [/cyan]"
             else:
-                prompt = "\n[cyan]💬 Type your message or press Enter to record audio: [/cyan]"
+                prompt = "\n[cyan]💬 Type message or Enter to record: [/cyan]"
 
             user_input = self.console.input(prompt).strip()
-
-            # IMPORTANT: Clear any buffered input and ensure console is ready for Live display
-            import sys
-
             sys.stdout.flush()
             sys.stderr.flush()
 
-            # Check if user typed something
             if user_input:
-                # Text input mode
-                self.console.print(f"[green]You: {user_input}")
-
-                # Process text input
-                if self.tts:  # Any TTS backend (ChatterBox or Kokoro)
-                    # Generate response from text
-                    if self.config.show_stats:
-                        llm_start = time.time()
-
-                    response = self.llm.generate_response(user_input, self.config.session_id)
-
-                    if self.config.show_stats:
-                        llm_time = time.time() - llm_start
-                        self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
-
-                    # Synthesize speech response
-                    if self.config.show_stats:
-                        tts_start = time.time()
-
-                    if self.config.tts_backend == "kokoro":
-                        # Kokoro TTS
-                        sample_rate, audio_array = self.tts.synthesize_long_form(response)
-                    elif self.config.tts_backend == "chatterbox":
-                        # ChatterBox TTS
-                        if self.config.chatterbox.fast_mode:
-                            sample_rate, audio_array = self.tts.synthesize_long_form(
-                                response,
-                                fast_mode=True,
-                            )
-                        else:
-                            # Adjust TTS parameters based on emotion
-                            exaggeration, cfg_weight = self.adjust_tts_parameters(
-                                response, self.config.chatterbox.exaggeration, self.config.chatterbox.cfg_weight
-                            )
-                            self.console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
-                            sample_rate, audio_array = self.tts.synthesize_long_form(
-                                response,
-                                exaggeration=exaggeration,
-                                cfg_weight=cfg_weight,
-                            )
-
-                    if self.config.show_stats:
-                        tts_time = time.time() - tts_start
-                        self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
-                        # Show total time for text input (no STT)
-                        total_time = llm_time + tts_time
-                        self.console.print(f"[dim]📊 Total: {total_time:.2f}s[/dim]")
-
-                    # Save voice sample if configured
-                    if self.config.chatterbox.save_voice_samples:
-                        self.response_count += 1
-                        output_path = (
-                            self.config.chatterbox.voice_output_dir / f"response_{self.response_count:03d}.wav"
-                        )
-                        self.tts.save_voice_sample(response, output_path)
-
-                    # Play response
-                    self.audio.play_audio(audio_array, sample_rate)
-                else:
-                    # Native Gemma3 audio workflow - text input but no TTS configured
-                    if self.config.show_stats:
-                        llm_start = time.time()
-
-                    response = self.llm.generate_response(user_input, self.config.session_id)
-
-                    if self.config.show_stats:
-                        llm_time = time.time() - llm_start
-                        self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
-
-                    self.console.print(
-                        "[dim]Note: TTS is disabled. Use --no-tts to explicitly disable, or check if TTS backend failed to load.[/dim]"
-                    )
-
+                self._process_text_response(user_input)
                 return True
 
-            # Voice input mode - user pressed Enter without typing
-            self.console.print("[dim]Starting voice input mode...[/dim]")
-
-            # Small delay to ensure console is ready for Live display
+            # Voice input mode
+            self.console.print("\n[bold cyan]🎤 Starting voice input...[/bold cyan]")
             time.sleep(0.1)
 
-            # Use VAD or traditional recording based on config
-            if self.config.audio.use_vad and self.config.audio.vad_auto_start:
-                # Use fully automatic VAD-based recording
-                audio_data = self.audio.record_with_vad_auto()
-                self.console.print(
-                    f"[cyan]✓ VAD recording complete: {len(audio_data) if audio_data is not None else 0} samples[/cyan]"
-                )
-            elif self.config.audio.use_vad:
-                # Use manual-start VAD recording (press Enter, then auto-stop on silence)
+            if self.config.audio.use_vad:
                 audio_data = self.audio.record_with_vad()
             else:
-                # Traditional recording with manual stop
                 self.console.print("[cyan]🎤 Recording... Press Enter to stop.")
-
-                # Record audio
                 stop_event = threading.Event()
                 recording_thread = threading.Thread(
                     target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)), daemon=True
                 )
                 recording_thread.start()
-
-                # Wait for user to stop recording
                 input()
                 stop_event.set()
                 recording_thread.join()
-
-                # Get recorded audio
                 audio_data = getattr(self, "_recorded_audio", None)
+
             if audio_data is None or audio_data.size == 0:
                 self.console.print("[yellow]No audio recorded. Please speak clearly and try again.")
                 return True
 
-            # Use TTS workflow or native audio based on configuration
-            if self.tts and self.config.tts_backend != "none":
-                # Traditional workflow: transcribe → LLM → TTS
-                # Need to transcribe first for text-based LLM
-                self.console.print(f"[cyan]Transcribing audio... ({len(audio_data) / 16000:.1f}s @ 16kHz)[/cyan]")
-                # Force flush to ensure message is displayed
-                import sys
-
-                sys.stdout.flush()
-
-                if self.config.show_stats:
-                    stt_start = time.time()
-
-                try:
-                    text = self.stt.transcribe(audio_data)
-
-                except TimeoutError:
-                    self.console.print("[red]Transcription timed out. This might be due to:[/red]")
-                    self.console.print("[yellow]- Audio too quiet or noisy[/yellow]")
-                    self.console.print("[yellow]- System resources constrained[/yellow]")
-                    self.console.print("[yellow]- Whisper model issue[/yellow]")
-                    return True
-                except Exception as e:
-                    self.console.print(f"[red]Transcription error: {e}[/red]")
-                    return True
-
-                if self.config.show_stats:
-                    stt_time = time.time() - stt_start
-                    self.console.print(f"[dim]📊 STT: {stt_time:.2f}s[/dim]")
-
-                if not text or not text.strip():
-                    self.console.print("[yellow]No speech detected. Please speak clearly and try again.")
-                    return True
-
-                self.console.print(f"[green]You: {text}")
-
-                # Generate response
-                if self.config.show_stats:
-                    llm_start = time.time()
-
-                response = self.llm.generate_response(text, self.config.session_id)
-
-                if self.config.show_stats:
-                    llm_time = time.time() - llm_start
-                    self.console.print(f"[dim]📊 LLM: {llm_time:.2f}s[/dim]")
-
-                # Adjust TTS parameters based on emotion (ChatterBox only)
-                if self.config.tts_backend == "chatterbox" and self.adjust_tts_parameters:
-                    exaggeration, cfg_weight = self.adjust_tts_parameters(
-                        response, self.config.chatterbox.exaggeration, self.config.chatterbox.cfg_weight
-                    )
-                    self.console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
-
-                # Synthesize speech based on TTS backend
-                if self.config.show_stats:
-                    tts_start = time.time()
-
-                if self.config.tts_backend == "kokoro":
-                    # Kokoro TTS
-                    sample_rate, audio_array = self.tts.synthesize_long_form(response)
-                elif self.config.tts_backend == "chatterbox":
-                    # ChatterBox TTS
-                    if self.config.chatterbox.fast_mode:
-                        # In fast mode, use optimized synthesis
-                        sample_rate, audio_array = self.tts.synthesize_long_form(
-                            response,
-                            fast_mode=True,
-                        )
-                    else:
-                        # In quality mode, use emotion-adjusted parameters
-                        sample_rate, audio_array = self.tts.synthesize_long_form(
-                            response,
-                            exaggeration=exaggeration,
-                            cfg_weight=cfg_weight,
-                        )
-
-                if self.config.show_stats:
-                    tts_time = time.time() - tts_start
-                    self.console.print(f"[dim]📊 TTS ({self.config.tts_backend}): {tts_time:.2f}s[/dim]")
-                    # Show total time for voice input
-                    total_time = stt_time + llm_time + tts_time
-                    self.console.print(f"[dim]📊 Total: {total_time:.2f}s[/dim]")
-
-                # Save voice sample if configured
-                if self.config.chatterbox.save_voice_samples:
-                    self.response_count += 1
-                    output_path = self.config.chatterbox.voice_output_dir / f"response_{self.response_count:03d}.wav"
-                    self.tts.save_voice_sample(response, output_path)
-
-                # Play response
-                self.audio.play_audio(audio_array, sample_rate)
-
-            else:
-                # Native Gemma3 audio workflow - no transcription needed!
-                self.console.print("[cyan]Processing with native audio workflow...")
-
-                # Gemma3 directly processes audio, no need for Whisper transcription
-                prompt_text = "Listen to this audio and respond conversationally to what you hear."
-
-                # Generate response with audio input
-                if self.config.show_stats:
-                    llm_start = time.time()
-
-                response = self.llm.generate_response(
-                    prompt_text,
-                    self.config.session_id,
-                    audio_array=audio_data,
-                    sample_rate=self.config.audio.sample_rate,
-                )
-
-                if self.config.show_stats:
-                    llm_time = time.time() - llm_start
-                    self.console.print(f"[dim]📊 LLM (with audio): {llm_time:.2f}s[/dim]")
-
-                # The Gemma3 model processes audio input and generates text responses
-                # Audio output generation is not currently supported by mlx-vlm
-                self.console.print(
-                    "[dim]Note: Gemma3 processes audio input directly but generates text responses.[/dim]"
-                )
-
+            self._process_voice_response(audio_data)
             return True
 
         except KeyboardInterrupt:

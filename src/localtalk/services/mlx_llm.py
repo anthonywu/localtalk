@@ -1,25 +1,45 @@
-"""Language model service using MLX-VLM with audio support."""
+"""Language model service using MLX-LM with audio support."""
 
+import os
 import platform
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from openai_harmony import (
+    Conversation,
+    DeveloperContent,
+    HarmonyEncoding,
+    Message,
+    ReasoningEffort,
+    Role,
+    StreamableParser,
+    SystemContent,
+    load_harmony_encoding,
+)
 from rich.console import Console
 
-from localtalk.models.config import MLXLMConfig
+from localtalk.models.config import MLXLMConfig, ReasoningLevel
+
+_REASONING_MAP: dict[ReasoningLevel, ReasoningEffort] = {
+    ReasoningLevel.LOW: ReasoningEffort.LOW,
+    ReasoningLevel.MEDIUM: ReasoningEffort.MEDIUM,
+    ReasoningLevel.HIGH: ReasoningEffort.HIGH,
+}
 
 
 class MLXLanguageModelService:
-    """Service for generating responses using MLX-VLM with audio support."""
+    """Service for generating responses using MLX-LM with audio support."""
 
     def __init__(self, config: MLXLMConfig, system_prompt: str, console: Console | None = None):
         self.config = config
         self.system_prompt = system_prompt
         self.console = console or Console()
-        self.chat_history = {}
+        self.chat_history: dict[str, list[Message]] = {}
+        self.reasoning_effort = _REASONING_MAP[config.reasoning_effort]
         self._load_model()
+        self._init_harmony()
 
     def _load_model(self):
         """Load the MLX model and processor."""
@@ -28,35 +48,39 @@ class MLXLanguageModelService:
             self.console.print("[yellow]Warning: MLX is optimized for macOS with Apple Silicon.")
             self.console.print("[yellow]Other platforms may have limited functionality or performance.")
 
-        self.console.print(f"[cyan]Loading MLX model: {self.config.model}")
-        with self.console.status(
-            "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
-            spinner="dots",
-        ):
-            try:
-                from mlx_vlm import generate, load
-                from mlx_vlm.prompt_utils import apply_chat_template
-                from mlx_vlm.utils import load_config
+        try:
+            self.console.print(f"[cyan]Loading MLX model: {self.config.model}")
+            with self.console.status(
+                "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
+                spinner="dots",
+            ):
+                from mlx_lm import load, stream_generate
 
-                self.generate = generate
-                self.apply_chat_template = apply_chat_template
-                self.load_config_func = load_config
-
-                self.model, self.processor = load(self.config.model)
+                self.stream_generate = stream_generate
+                self.model, self.tokenizer = load(self.config.model)
                 try:
                     self.config_obj = self.model.config
                 except AttributeError:
                     self.config_obj = None
-            except ImportError as e:
-                self.console.print(f"[red]❌ Failed to import MLX-VLM: {e}")
-                if platform.system() != "Darwin":
-                    self.console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
-                else:
-                    self.console.print("[yellow]Try running: uv pip install mlx-vlm")
-                raise SystemExit(1)  # noqa: B904
-        self.console.print("[green]Model loaded successfully!")
+            self.console.print("[green]Model loaded successfully!")
+        except (ImportError, Exception) as e:
+            # Always use the main console for critical errors
+            from rich.console import Console
 
-    def _get_session_history(self, session_id: str) -> list[dict]:
+            error_console = Console()
+            error_console.print(f"[red]❌ Failed to load MLX-LM: {e}")
+            if platform.system() != "Darwin":
+                error_console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
+            else:
+                error_console.print("[yellow]Try running: uv pip install mlx-lm")
+            raise SystemExit(1)  # noqa: B904
+
+    def _init_harmony(self):
+        """Initialize the Harmony encoding for chat template rendering and parsing."""
+        self.harmony: HarmonyEncoding = load_harmony_encoding("HarmonyGptOss")
+        self.console.print("[green]Harmony encoding initialized.")
+
+    def _get_session_history(self, session_id: str) -> list[Message]:
         """Get or create chat history for a session."""
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
@@ -153,79 +177,48 @@ class MLXLanguageModelService:
             audio_files = [audio_path]
             self.console.print(f"[cyan]Saved audio to: {audio_path}")
 
-        # If we have audio, use the audio workflow as shown in the example
+        # Note: mlx-lm does not support audio input directly.
+        # For audio input, use text generation based on the provided text parameter
         if audio_files:
-            # Following the mlx-vlm audio pattern
-            # For audio input, use a more specific prompt
-            if text == "Listen to this audio and respond conversationally to what you hear.":
-                # Try different prompts that might work better
-                prompt = "Transcribe this audio and respond to what the person is saying."
-            else:
-                prompt = text
-            num_audios = len(audio_files)
+            # Audio input mode - use the text parameter as the prompt
+            self.console.print("[yellow]Audio input detected. Using text-based processing.")
+            if not text or text == "Listen to this audio and respond conversationally to what you hear.":
+                text = "Please process the audio input and respond."
 
-            # Apply chat template with audio
-            formatted_prompt = self.apply_chat_template(
-                self.processor, self.config_obj if self.config_obj else self.model.config, prompt, num_audios=num_audios
-            )
+        # Build conversation using Harmony Message objects
+        messages: list[Message] = []
 
-            # Generate response with audio
-            self.console.print("[cyan]Generating response with audio input...")
+        # Add system and developer messages if this is the first message
+        if not history:
+            # System message with reasoning effort configuration
+            sys_content = SystemContent.new().with_reasoning_effort(self.reasoning_effort)
+            messages.append(Message.from_role_and_content(Role.SYSTEM, sys_content))
 
-            with self.console.status("Processing...", spinner="dots"):
-                output = self.generate(
-                    self.model,
-                    self.processor,
-                    formatted_prompt,
-                    audio=audio_files,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
-                    top_p=self.config.top_p,
-                    repetition_penalty=self.config.repetition_penalty,
-                    repetition_context_size=self.config.repetition_context_size,
-                    verbose=False,  # Turn off verbose for cleaner output
-                )
+            # Developer message with instructions
+            dev_content = DeveloperContent.new().with_instructions(self.system_prompt)
+            messages.append(Message.from_role_and_content(Role.DEVELOPER, dev_content))
 
-            # Extract text from output
-            response_text = output.text.strip()
+        # Add conversation history (already Message objects)
+        messages.extend(history)
 
-        else:
-            # Text-only mode
-            # Build conversation with system prompt
-            conversation = []
+        # Add current user message
+        messages.append(Message.from_role_and_content(Role.USER, text))
 
-            # Add system message if this is the first message
-            if not history:
-                conversation.append({"role": "system", "content": self.system_prompt})
+        # Render conversation to tokens using Harmony
+        conversation = Conversation.from_messages(messages)
+        prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
 
-            # Add conversation history
-            conversation.extend(history)
-
-            # Add current user message
-            conversation.append({"role": "user", "content": text})
-
-            # Apply chat template if processor has this method
-            if hasattr(self.processor, "apply_chat_template"):
-                prompt = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
-            else:
-                # Fallback to simple prompt construction
-                prompt = f"{self.system_prompt}\n\n{text}"
-
-            # Generate response
-            with self.console.status("Generating response...", spinner="dots"):
-                result = self.generate(
-                    model=self.model,
-                    processor=self.processor,
-                    prompt=prompt,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
-                    top_p=self.config.top_p,
-                    repetition_penalty=self.config.repetition_penalty,
-                    repetition_context_size=self.config.repetition_context_size,
-                    verbose=False,
-                )
-
-            response_text = result.text.strip()
+        # Generate response using stream_generate to collect raw tokens
+        # This preserves special tokens that would be lost in decoded text
+        generated_tokens: list[int] = []
+        with self.console.status("Generating response...", spinner="dots"):
+            for response in self.stream_generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt_tokens,
+                max_tokens=self.config.max_tokens,
+            ):
+                generated_tokens.append(response.token)
 
         # Clean up temporary audio files
         for audio_file in audio_files:
@@ -234,9 +227,63 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
-        # Update conversation history
-        history.append({"role": "user", "content": text})
-        history.append({"role": "assistant", "content": response_text})
+        debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
+
+        if debug_mode:
+            raw_text = self.harmony.decode(generated_tokens)
+            self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
+            self.console.print(f"[dim]{repr(raw_text)}[/dim]")
+
+        # Parse the raw tokens using Harmony StreamableParser
+        parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
+        for tok in generated_tokens:
+            parser.process(tok)
+        try:
+            parser.process_eos()
+        except Exception:
+            pass  # EOS processing may fail if response is truncated
+
+        parsed_messages = parser.messages
+
+        if debug_mode:
+            self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
+
+        # Log all channels for debugging, extract "final" for response
+        clean_response = ""
+        for msg in parsed_messages:
+            # Extract text content from message
+            msg_text = ""
+            for content in msg.content:
+                if hasattr(content, "text"):
+                    msg_text = content.text.strip()
+                    break
+
+            channel = msg.channel or "(no channel)"
+            if debug_mode:
+                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {msg_text}")
+
+            if msg.channel == "final":
+                clean_response = msg_text
+            elif msg.channel in ("analysis", "commentary"):
+                # Log analysis/commentary channels (not read out)
+                if not debug_mode:
+                    self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
+
+        # Fallback: if no "final" channel found, use last message content
+        if not clean_response and parsed_messages:
+            last_msg = parsed_messages[-1]
+            for content in last_msg.content:
+                if hasattr(content, "text"):
+                    clean_response = content.text.strip()
+                    break
+
+        # If parsing failed entirely, decode raw tokens as fallback
+        if not clean_response:
+            clean_response = self.harmony.decode(generated_tokens)
+
+        # Update conversation history with Message objects
+        history.append(Message.from_role_and_content(Role.USER, text))
+        history.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
 
         # Keep only recent history (last 10 exchanges)
         if len(history) > 20:
@@ -244,8 +291,8 @@ class MLXLanguageModelService:
         else:
             self.chat_history[session_id] = history
 
-        self.console.print(f"[cyan]Assistant: {response_text}")
-        return response_text
+        self.console.print(f"[cyan]Assistant: {clean_response}")
+        return clean_response
 
     def clear_history(self, session_id: str = "default"):
         """Clear conversation history for a session."""

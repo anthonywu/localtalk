@@ -1,8 +1,17 @@
 """Configuration models for the Local Talk App."""
 
+from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class ReasoningLevel(str, Enum):
+    """Reasoning effort level for gpt-oss models."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class WhisperConfig(BaseModel):
@@ -16,12 +25,15 @@ class WhisperConfig(BaseModel):
 class MLXLMConfig(BaseModel):
     """Configuration for MLX-LM language model."""
 
-    model: str = Field(default="mlx-community/gemma-3n-E2B-it-4bit", description="MLX model from Hugging Face Hub")
+    model: str = Field(default="mlx-community/gpt-oss-20b-MXFP4-Q8", description="MLX model from Hugging Face Hub")
     temperature: float = Field(default=0.7, description="Temperature for text generation")
     max_tokens: int = Field(default=100, description="Maximum tokens to generate")
     top_p: float = Field(default=1.0, description="Top-p sampling parameter")
     repetition_penalty: float = Field(default=1.0, description="Repetition penalty")
     repetition_context_size: int = Field(default=20, description="Context size for repetition penalty")
+    reasoning_effort: ReasoningLevel = Field(
+        default=ReasoningLevel.LOW, description="Reasoning effort: low, medium, or high"
+    )
 
 
 class ChatterBoxConfig(BaseModel):
@@ -57,31 +69,12 @@ class AudioConfig(BaseModel):
     channels: int = Field(default=1, description="Number of audio channels")
     chunk_size: int = Field(default=512, description="Audio chunk size")
     silence_threshold: float = Field(default=0.01, description="Silence detection threshold")
-    silence_duration: float = Field(default=1.0, description="Duration of silence to stop recording")
+    silence_duration: float = Field(default=5.0, description="Duration of silence to stop recording")
     use_vad: bool = Field(default=True, description="Use Voice Activity Detection for audio input")
     vad_auto_start: bool = Field(default=True, description="Automatically start recording when speech detected")
     vad_threshold: float = Field(default=0.5, description="VAD probability threshold for speech detection")
     vad_min_speech_duration_ms: int = Field(default=250, description="Minimum speech duration in milliseconds")
     vad_speech_pad_ms: int = Field(default=400, description="Speech padding in milliseconds")
-
-
-class KokoroConfig(BaseModel):
-    """Configuration for MLX-Audio Kokoro TTS."""
-
-    model: str = Field(default="mlx-community/Kokoro-82M-4bit", description="Kokoro model to use")
-    voice: str = Field(default="af_heart", description="Voice to use (af_heart, af_nova, af_bella, bf_emma)")
-    speed: float = Field(default=1.0, description="Speech speed (0.5-2.0)")
-    lang_code: str = Field(
-        default="a", description="Language code (a=American English, b=British, j=Japanese, z=Chinese)"
-    )
-    sample_rate: int = Field(default=24000, description="Audio sample rate")
-
-    @field_validator("speed")
-    @classmethod
-    def validate_speed(cls, v: float) -> float:
-        if not 0.5 <= v <= 2.0:
-            raise ValueError(f"Speed must be between 0.5 and 2.0, got {v}")
-        return v
 
 
 class AppConfig(BaseModel):
@@ -90,12 +83,11 @@ class AppConfig(BaseModel):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     mlx_lm: MLXLMConfig = Field(default_factory=MLXLMConfig)
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
-    kokoro: KokoroConfig = Field(default_factory=KokoroConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
         default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user.",
         description="System prompt for the LLM",
     )
-    tts_backend: str = Field(default="kokoro", description="TTS backend to use: 'kokoro', 'chatterbox', or 'none'")
+    tts_backend: str = Field(default="chatterbox", description="TTS backend to use: 'chatterbox' or 'none'")
     show_stats: bool = Field(default=False, description="Show timing statistics for STT, LLM, and TTS steps")

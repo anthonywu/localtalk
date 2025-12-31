@@ -3,7 +3,6 @@
 import argparse
 import os
 import warnings
-from pathlib import Path
 
 # Disable Hugging Face telemetry to ensure complete offline/private capabiliity
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -22,38 +21,17 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
 
-    # Voice cloning (hidden for now - advanced/future workflow)
-    # parser.add_argument(
-    #     "--voice",
-    #     type=Path,
-    #     help="Path to voice sample for cloning (10-30 seconds of clear speech)",
-    # )
-
-    # TTS parameters
-    parser.add_argument(
-        "--exaggeration",
-        type=float,
-        default=0.5,
-        help="Emotion exaggeration (0.0-1.0, default: 0.5)",
-    )
-    parser.add_argument(
-        "--cfg-weight",
-        type=float,
-        default=0.5,
-        help="CFG weight for pacing (0.0-1.0, default: 0.5)",
-    )
-
     # Model selection
     parser.add_argument(
         "--model",
         type=str,
-        default="mlx-community/gemma-3n-E2B-it-4bit",
-        help="MLX model from Huggingface Hub (default: mlx-community/gemma-3n-E2B-it-4bit)",
+        default="mlx-community/gpt-oss-20b-MXFP4-Q8",
+        help="MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8)",
     )
     parser.add_argument(
         "--whisper-model",
         type=str,
-        default="base.en",
+        default="turbo",
         choices=[
             "tiny",
             "tiny.en",
@@ -69,19 +47,6 @@ def parse_args():
             "turbo",
         ],
         help="Whisper model size. English-only (.en) models perform better for English. Sizes: tiny (39M), base (74M), small (244M), medium (769M), large (1550M), turbo (798M, fast). Default: base.en",
-    )
-
-    # Output options
-    parser.add_argument(
-        "--save-voice",
-        action="store_true",
-        help="Save generated voice samples to audio-output-cache/ directory",
-    )
-    parser.add_argument(
-        "--voice-output-dir",
-        type=Path,
-        default=Path("audio-output-cache"),
-        help="Directory to save voice samples (default: ./audio-output-cache/)",
     )
 
     # MLX-LM configuration
@@ -110,47 +75,12 @@ def parse_args():
         type=str,
         help="Custom system prompt for the LLM",
     )
-
-    # Audio workflow
     parser.add_argument(
-        "--use-chatterbox",
-        action="store_true",
-        help="Use ChatterBox TTS instead of native Gemma3 audio workflow",
-    )
-
-    # TTS performance
-    parser.add_argument(
-        "--tts-quality",
-        action="store_true",
-        help="Use quality mode for TTS (slower but better quality). Default is fast mode.",
-    )
-
-    # Kokoro TTS options
-    parser.add_argument(
-        "--kokoro-model",
+        "--system-prompt-file",
         type=str,
-        default="mlx-community/Kokoro-82M-4bit",
-        choices=[
-            "mlx-community/Kokoro-82M-4bit",
-            "mlx-community/Kokoro-82M-6bit",
-            "mlx-community/Kokoro-82M-8bit",
-            "mlx-community/Kokoro-82M-bf16",
-        ],
-        help="Kokoro model to use (default: 82M-4bit for fastest speed)",
+        help="Path to a text file containing a custom system prompt for the LLM",
     )
-    parser.add_argument(
-        "--kokoro-voice",
-        type=str,
-        default="af_heart",
-        choices=["af_heart", "af_nova", "af_bella", "bf_emma"],
-        help="Kokoro voice to use (default: af_heart)",
-    )
-    parser.add_argument(
-        "--kokoro-speed",
-        type=float,
-        default=1.0,
-        help="Kokoro speech speed 0.5-2.0 (default: 1.0)",
-    )
+
     parser.add_argument(
         "--no-tts",
         action="store_true",
@@ -162,6 +92,13 @@ def parse_args():
         "--stats",
         action="store_true",
         help="Show timing statistics for STT, LLM, and TTS steps",
+    )
+
+    # Microphone test
+    parser.add_argument(
+        "--test-mic",
+        action="store_true",
+        help="Test microphone input levels and exit (useful for diagnosing audio issues)",
     )
 
     # VAD options
@@ -183,7 +120,6 @@ def parse_args():
         default=250,
         help="Minimum speech duration in milliseconds (default: 250)",
     )
-    
 
     return parser.parse_args()
 
@@ -192,16 +128,32 @@ def main():
     """Main entry point for the CLI."""
     args = parse_args()
 
+    # Handle --test-mic early (before loading heavy models)
+    if args.test_mic:
+        from rich.console import Console
+
+        from localtalk.models.config import AudioConfig
+        from localtalk.services.audio import AudioService
+
+        console = Console()
+        console.print("\n[bold cyan]🎤 Microphone Test Mode[/bold cyan]\n")
+
+        # Create minimal audio config (no VAD needed for mic test)
+        audio_config = AudioConfig(use_vad=False)
+        audio_service = AudioService(audio_config, console)
+
+        # Run the test
+        success = audio_service.test_microphone(duration_seconds=5.0)
+
+        if success:
+            console.print("\n[green]Microphone test passed. You can run localtalk normally.[/green]")
+        else:
+            console.print("\n[red]Microphone test failed. Please fix audio input before using localtalk.[/red]")
+
+        return
+
     # Build configuration from arguments
     config = AppConfig()
-
-    # Update voice configuration
-    # if args.voice:
-    #     config.chatterbox.voice_sample_path = args.voice
-    config.chatterbox.exaggeration = args.exaggeration
-    config.chatterbox.cfg_weight = args.cfg_weight
-    config.chatterbox.save_voice_samples = args.save_voice
-    config.chatterbox.voice_output_dir = args.voice_output_dir
 
     # Update model configuration
     config.mlx_lm.model = args.model
@@ -210,26 +162,43 @@ def main():
     config.mlx_lm.max_tokens = args.max_tokens
     config.whisper.model_size = args.whisper_model
 
-    # Update system prompt if provided
-    if args.system_prompt:
-        config.system_prompt = args.system_prompt
+    # Update system prompt - prioritize --system-prompt-file over --system-prompt over default file
+    from pathlib import Path
 
-    # Update audio workflow mode
-    # Remove deprecated use_chatterbox - handled by tts_backend below
+    prompt_file_path = None
+
+    if args.system_prompt_file:
+        prompt_file_path = args.system_prompt_file
+    else:
+        # Try to load default prompt from prompts/default.txt
+        default_prompt_path = Path(__file__).parent.parent.parent / "prompts" / "default.txt"
+        if default_prompt_path.exists():
+            prompt_file_path = str(default_prompt_path)
+
+    if prompt_file_path:
+        try:
+            with open(prompt_file_path, encoding="utf-8") as f:
+                config.system_prompt = f.read().strip()
+        except FileNotFoundError:
+            from rich.console import Console
+
+            console = Console()
+            console.print(f"[red]Error: System prompt file not found: {prompt_file_path}[/red]")
+            return
+        except Exception as e:
+            from rich.console import Console
+
+            console = Console()
+            console.print(f"[red]Error reading system prompt file: {e}[/red]")
+            return
+    elif args.system_prompt:
+        config.system_prompt = args.system_prompt
 
     # Set TTS backend
     if args.no_tts:
         config.tts_backend = "none"
-    elif args.use_chatterbox:
-        config.tts_backend = "chatterbox"
     else:
-        # Default to Kokoro for fast TTS
-        config.tts_backend = "kokoro"
-
-    # Update Kokoro configuration
-    config.kokoro.model = args.kokoro_model
-    config.kokoro.voice = args.kokoro_voice
-    config.kokoro.speed = args.kokoro_speed
+        config.tts_backend = "chatterbox"
 
     # Enable stats if requested
     config.show_stats = args.stats
@@ -244,50 +213,10 @@ def main():
     elif args.vad_mode == "off":
         config.audio.use_vad = False
         config.audio.vad_auto_start = False
-    
+
     # Apply VAD threshold and timing settings
     config.audio.vad_threshold = args.vad_threshold
     config.audio.vad_min_speech_duration_ms = args.vad_min_speech_ms
-
-    # Show experimental warning for ChatterBox mode
-    if args.use_chatterbox:
-        from rich.console import Console
-        from rich.panel import Panel
-
-        console = Console()
-
-        warning_text = """[bold red]⚠️  EXPERIMENTAL FEATURE WARNING[/bold red]
-
-[yellow]ChatterBox TTS mode is EXPERIMENTAL and NOT RECOMMENDED for regular use.[/yellow]
-
-This is a research preview with known performance issues:
-• Text-to-speech generation is extremely slow
-• The last step of the workflow will have unreasonable latency
-• Native Gemma3 audio mode (default) is significantly faster
-
-[dim]ChatterBox provides high-quality voice cloning but at the cost of speed.
-For production use, we recommend the default native audio workflow.[/dim]"""
-
-        console.print(Panel(warning_text, title="[bold red]EXPERIMENTAL MODE[/bold red]", border_style="red"))
-
-        # Prompt for confirmation
-        try:
-            response = (
-                console.input(
-                    "\n[bold yellow]Do you want to continue with ChatterBox TTS anyway? (yes/N):[/bold yellow] "
-                )
-                .strip()
-                .lower()
-            )
-            if response not in ["yes", "y"]:
-                console.print("\n[green]Good choice! Switching to recommended native audio mode.[/green]")
-                # Handled by tts_backend selection
-            else:
-                console.print("\n[yellow]Proceeding with experimental ChatterBox TTS mode...[/yellow]")
-                config.chatterbox.fast_mode = not args.tts_quality
-        except KeyboardInterrupt:
-            console.print("\n[red]Aborted.[/red]")
-            return
 
     # Create and run assistant
     assistant = VoiceAssistant(config)
