@@ -175,6 +175,15 @@ localtalk
 localtalk --no-tts
 ```
 
+### Disabling Progress Bars
+
+If you prefer to disable progress bar output during model loading, set the environment variable:
+
+```bash
+export TQDM_DISABLE=1
+localtalk
+```
+
 ## Configuration Options
 
 ### Command-Line Arguments

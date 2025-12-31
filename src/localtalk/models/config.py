@@ -1,8 +1,17 @@
 """Configuration models for the Local Talk App."""
 
+from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class ReasoningLevel(str, Enum):
+    """Reasoning effort level for gpt-oss models."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class WhisperConfig(BaseModel):
@@ -22,6 +31,9 @@ class MLXLMConfig(BaseModel):
     top_p: float = Field(default=1.0, description="Top-p sampling parameter")
     repetition_penalty: float = Field(default=1.0, description="Repetition penalty")
     repetition_context_size: int = Field(default=20, description="Context size for repetition penalty")
+    reasoning_effort: ReasoningLevel = Field(
+        default=ReasoningLevel.LOW, description="Reasoning effort: low, medium, or high"
+    )
 
 
 class ChatterBoxConfig(BaseModel):

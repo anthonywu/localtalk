@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument(
         "--whisper-model",
         type=str,
-        default="base.en",
+        default="turbo",
         choices=[
             "tiny",
             "tiny.en",
@@ -164,9 +164,9 @@ def main():
 
     # Update system prompt - prioritize --system-prompt-file over --system-prompt over default file
     from pathlib import Path
-    
+
     prompt_file_path = None
-    
+
     if args.system_prompt_file:
         prompt_file_path = args.system_prompt_file
     else:
@@ -174,20 +174,20 @@ def main():
         default_prompt_path = Path(__file__).parent.parent.parent / "prompts" / "default.txt"
         if default_prompt_path.exists():
             prompt_file_path = str(default_prompt_path)
-    
+
     if prompt_file_path:
         try:
             with open(prompt_file_path, encoding="utf-8") as f:
                 config.system_prompt = f.read().strip()
         except FileNotFoundError:
             from rich.console import Console
-    
+
             console = Console()
             console.print(f"[red]Error: System prompt file not found: {prompt_file_path}[/red]")
             return
         except Exception as e:
             from rich.console import Console
-    
+
             console = Console()
             console.print(f"[red]Error reading system prompt file: {e}[/red]")
             return

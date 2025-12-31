@@ -1,5 +1,6 @@
 """Language model service using MLX-LM with audio support."""
 
+import os
 import platform
 import tempfile
 from pathlib import Path
@@ -11,13 +12,21 @@ from openai_harmony import (
     DeveloperContent,
     HarmonyEncoding,
     Message,
+    ReasoningEffort,
     Role,
     StreamableParser,
+    SystemContent,
     load_harmony_encoding,
 )
 from rich.console import Console
 
-from localtalk.models.config import MLXLMConfig
+from localtalk.models.config import MLXLMConfig, ReasoningLevel
+
+_REASONING_MAP: dict[ReasoningLevel, ReasoningEffort] = {
+    ReasoningLevel.LOW: ReasoningEffort.LOW,
+    ReasoningLevel.MEDIUM: ReasoningEffort.MEDIUM,
+    ReasoningLevel.HIGH: ReasoningEffort.HIGH,
+}
 
 
 class MLXLanguageModelService:
@@ -28,6 +37,7 @@ class MLXLanguageModelService:
         self.system_prompt = system_prompt
         self.console = console or Console()
         self.chat_history: dict[str, list[Message]] = {}
+        self.reasoning_effort = _REASONING_MAP[config.reasoning_effort]
         self._load_model()
         self._init_harmony()
 
@@ -178,8 +188,13 @@ class MLXLanguageModelService:
         # Build conversation using Harmony Message objects
         messages: list[Message] = []
 
-        # Add developer message with system prompt if this is the first message
+        # Add system and developer messages if this is the first message
         if not history:
+            # System message with reasoning effort configuration
+            sys_content = SystemContent.new().with_reasoning_effort(self.reasoning_effort)
+            messages.append(Message.from_role_and_content(Role.SYSTEM, sys_content))
+
+            # Developer message with instructions
             dev_content = DeveloperContent.new().with_instructions(self.system_prompt)
             messages.append(Message.from_role_and_content(Role.DEVELOPER, dev_content))
 
@@ -212,6 +227,13 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
+        debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
+
+        if debug_mode:
+            raw_text = self.harmony.decode(generated_tokens)
+            self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
+            self.console.print(f"[dim]{repr(raw_text)}[/dim]")
+
         # Parse the raw tokens using Harmony StreamableParser
         parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
         for tok in generated_tokens:
@@ -223,6 +245,9 @@ class MLXLanguageModelService:
 
         parsed_messages = parser.messages
 
+        if debug_mode:
+            self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
+
         # Log all channels for debugging, extract "final" for response
         clean_response = ""
         for msg in parsed_messages:
@@ -233,11 +258,16 @@ class MLXLanguageModelService:
                     msg_text = content.text.strip()
                     break
 
+            channel = msg.channel or "(no channel)"
+            if debug_mode:
+                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {msg_text}")
+
             if msg.channel == "final":
                 clean_response = msg_text
             elif msg.channel in ("analysis", "commentary"):
                 # Log analysis/commentary channels (not read out)
-                self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
+                if not debug_mode:
+                    self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
 
         # Fallback: if no "final" channel found, use last message content
         if not clean_response and parsed_messages:

@@ -169,7 +169,7 @@ class VoiceAssistant:
             )
 
         # Use Live display for progressive updates
-        with Live(create_panel(), refresh_per_second=4, console=self.console) as live:
+        with Live(create_panel(), refresh_per_second=1, console=self.console) as live:
             # Speech recognition
             init_messages.append(f"👂 Loading Whisper speech-to-text model: {self.config.whisper.model_size}")
             live.update(create_panel())
@@ -247,6 +247,7 @@ class VoiceAssistant:
             "✅ No tracking, no telemetry, no cloud APIs",
             "",
             "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            "[dim]💡 TIP: Disable progress bars with: export TQDM_DISABLE=1[/dim]",
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
