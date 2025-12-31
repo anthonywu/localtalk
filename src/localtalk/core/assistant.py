@@ -5,6 +5,8 @@ import threading
 import time
 from datetime import datetime
 
+import mistune
+from mistune.renderers.html import HTMLRenderer
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -13,6 +15,61 @@ from localtalk.models.config import AppConfig
 from localtalk.services.audio import AudioService
 from localtalk.services.mlx_llm import MLXLanguageModelService
 from localtalk.services.speech_recognition import SpeechRecognitionService
+
+
+class _PlainTextRenderer(HTMLRenderer):
+    """Renderer that strips markdown formatting, outputting plain text."""
+
+    def text(self, text):
+        return text
+
+    def emphasis(self, text):
+        return text
+
+    def strong(self, text):
+        return text
+
+    def link(self, text, **attrs):
+        return text
+
+    def image(self, text, **attrs):
+        return text or ""
+
+    def codespan(self, text):
+        return text
+
+    def linebreak(self):
+        return "\n"
+
+    def softbreak(self):
+        return " "
+
+    def paragraph(self, text):
+        return text + "\n\n"
+
+    def heading(self, text, level, **attrs):
+        return text + "\n"
+
+    def block_code(self, code, **attrs):
+        return code + "\n"
+
+    def block_quote(self, text):
+        return text
+
+    def list(self, text, ordered, **attrs):
+        return text
+
+    def list_item(self, text, **attrs):
+        return "• " + text + "\n" if text else ""
+
+    def thematic_break(self):
+        return "\n"
+
+
+def _strip_markdown(text: str) -> str:
+    """Strip markdown formatting from text, returning plain text."""
+    md = mistune.create_markdown(renderer=_PlainTextRenderer())
+    return md(text).strip()
 
 
 class VoiceAssistant:
@@ -243,7 +300,8 @@ class VoiceAssistant:
             if self.config.show_stats:
                 tts_start = time.time()
 
-            sample_rate, audio_array = self.tts.synthesize_long_form(response)
+            tts_text = _strip_markdown(response)
+            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
 
             if self.config.show_stats:
                 tts_time = time.time() - tts_start
@@ -304,7 +362,8 @@ class VoiceAssistant:
             if self.config.show_stats:
                 tts_start = time.time()
 
-            sample_rate, audio_array = self.tts.synthesize_long_form(response)
+            tts_text = _strip_markdown(response)
+            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
 
             if self.config.show_stats:
                 tts_time = time.time() - tts_start

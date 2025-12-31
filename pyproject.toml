@@ -40,6 +40,7 @@ dependencies = [
     "hf-transfer>=0.1.9",  # direct; also via mlx-audio
     "huggingface-hub>=0.36.0,<1.0",  # direct; also via mlx-audio, mlx-lm, mlx-vlm, transformers
     "librosa>=0.11.0",  # via mlx-audio
+    "mistune>=3.2.0,<4.0",  # direct
     "mlx>=0.30.1",  # direct; also via mlx-audio, mlx-lm, mlx-vlm
     "mlx-audio>=0.2.9",  # direct
     "mlx-lm>=0.29.1",  # direct; also via mlx-vlm
