@@ -46,6 +46,7 @@ dependencies = [
     "mlx-vlm>=0.3.9",  # direct
     "numpy>=2.0,<2.3.0",  # direct; restricted by opencv-python (via mlx-vlm)
     "onnxruntime>=1.16.1",  # via silero-vad
+    "openai-harmony>=0.0.8,<1.0",  # direct
     "openai-whisper>=20250625",  # direct
     "pydantic>=2.0.0",  # direct; also via fastapi (via mlx-vlm)
     "rich>=14.2.0",  # direct

@@ -57,7 +57,7 @@ class AudioConfig(BaseModel):
     channels: int = Field(default=1, description="Number of audio channels")
     chunk_size: int = Field(default=512, description="Audio chunk size")
     silence_threshold: float = Field(default=0.01, description="Silence detection threshold")
-    silence_duration: float = Field(default=1.0, description="Duration of silence to stop recording")
+    silence_duration: float = Field(default=5.0, description="Duration of silence to stop recording")
     use_vad: bool = Field(default=True, description="Use Voice Activity Detection for audio input")
     vad_auto_start: bool = Field(default=True, description="Automatically start recording when speech detected")
     vad_threshold: float = Field(default=0.5, description="VAD probability threshold for speech detection")

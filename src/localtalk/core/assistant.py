@@ -189,8 +189,7 @@ class VoiceAssistant:
             "✅ Everything runs 100% locally on your Mac",
             "✅ No tracking, no telemetry, no cloud APIs",
             "",
-            "[yellow]📵 TIP: Disable WiFi for complete peace of mind -",
-            "[yellow]   LocalTalk works perfectly offline!",
+            "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)

@@ -162,20 +162,32 @@ def main():
     config.mlx_lm.max_tokens = args.max_tokens
     config.whisper.model_size = args.whisper_model
 
-    # Update system prompt - prioritize --system-prompt-file over --system-prompt
+    # Update system prompt - prioritize --system-prompt-file over --system-prompt over default file
+    from pathlib import Path
+    
+    prompt_file_path = None
+    
     if args.system_prompt_file:
+        prompt_file_path = args.system_prompt_file
+    else:
+        # Try to load default prompt from prompts/default.txt
+        default_prompt_path = Path(__file__).parent.parent.parent / "prompts" / "default.txt"
+        if default_prompt_path.exists():
+            prompt_file_path = str(default_prompt_path)
+    
+    if prompt_file_path:
         try:
-            with open(args.system_prompt_file, "r", encoding="utf-8") as f:
+            with open(prompt_file_path, encoding="utf-8") as f:
                 config.system_prompt = f.read().strip()
         except FileNotFoundError:
             from rich.console import Console
-
+    
             console = Console()
-            console.print(f"[red]Error: System prompt file not found: {args.system_prompt_file}[/red]")
+            console.print(f"[red]Error: System prompt file not found: {prompt_file_path}[/red]")
             return
         except Exception as e:
             from rich.console import Console
-
+    
             console = Console()
             console.print(f"[red]Error reading system prompt file: {e}[/red]")
             return

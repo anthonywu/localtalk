@@ -6,6 +6,15 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from openai_harmony import (
+    Conversation,
+    DeveloperContent,
+    HarmonyEncoding,
+    Message,
+    Role,
+    StreamableParser,
+    load_harmony_encoding,
+)
 from rich.console import Console
 
 from localtalk.models.config import MLXLMConfig
@@ -18,8 +27,9 @@ class MLXLanguageModelService:
         self.config = config
         self.system_prompt = system_prompt
         self.console = console or Console()
-        self.chat_history = {}
+        self.chat_history: dict[str, list[Message]] = {}
         self._load_model()
+        self._init_harmony()
 
     def _load_model(self):
         """Load the MLX model and processor."""
@@ -34,9 +44,9 @@ class MLXLanguageModelService:
                 "Loading model - if using model for the first time. This step may take a while but will only happen one time.",
                 spinner="dots",
             ):
-                from mlx_lm import generate, load
+                from mlx_lm import load, stream_generate
 
-                self.generate = generate
+                self.stream_generate = stream_generate
                 self.model, self.tokenizer = load(self.config.model)
                 try:
                     self.config_obj = self.model.config
@@ -55,7 +65,12 @@ class MLXLanguageModelService:
                 error_console.print("[yellow]Try running: uv pip install mlx-lm")
             raise SystemExit(1)  # noqa: B904
 
-    def _get_session_history(self, session_id: str) -> list[dict]:
+    def _init_harmony(self):
+        """Initialize the Harmony encoding for chat template rendering and parsing."""
+        self.harmony: HarmonyEncoding = load_harmony_encoding("HarmonyGptOss")
+        self.console.print("[green]Harmony encoding initialized.")
+
+    def _get_session_history(self, session_id: str) -> list[Message]:
         """Get or create chat history for a session."""
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
@@ -160,39 +175,35 @@ class MLXLanguageModelService:
             if not text or text == "Listen to this audio and respond conversationally to what you hear.":
                 text = "Please process the audio input and respond."
 
-        # Text-only mode
-        # Build conversation with system prompt
-        conversation = []
+        # Build conversation using Harmony Message objects
+        messages: list[Message] = []
 
-        # Add system message if this is the first message
+        # Add developer message with system prompt if this is the first message
         if not history:
-            conversation.append({"role": "system", "content": self.system_prompt})
+            dev_content = DeveloperContent.new().with_instructions(self.system_prompt)
+            messages.append(Message.from_role_and_content(Role.DEVELOPER, dev_content))
 
-        # Add conversation history
-        conversation.extend(history)
+        # Add conversation history (already Message objects)
+        messages.extend(history)
 
         # Add current user message
-        conversation.append({"role": "user", "content": text})
+        messages.append(Message.from_role_and_content(Role.USER, text))
 
-        # Apply chat template if tokenizer has this method
-        if hasattr(self.tokenizer, "apply_chat_template"):
-            prompt = self.tokenizer.apply_chat_template(conversation, add_generation_prompt=True)
-        else:
-            # Fallback to simple prompt construction
-            prompt = f"{self.system_prompt}\n\n{text}"
+        # Render conversation to tokens using Harmony
+        conversation = Conversation.from_messages(messages)
+        prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
 
-        # Generate response
+        # Generate response using stream_generate to collect raw tokens
+        # This preserves special tokens that would be lost in decoded text
+        generated_tokens: list[int] = []
         with self.console.status("Generating response...", spinner="dots"):
-            result = self.generate(
+            for response in self.stream_generate(
                 self.model,
                 self.tokenizer,
-                prompt=prompt,
+                prompt=prompt_tokens,
                 max_tokens=self.config.max_tokens,
-                verbose=False,
-            )
-
-        # mlx_lm.generate() returns a string directly
-        response_text = result.strip() if isinstance(result, str) else result.text.strip()
+            ):
+                generated_tokens.append(response.token)
 
         # Clean up temporary audio files
         for audio_file in audio_files:
@@ -201,55 +212,48 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
-        # Extract only the final message content, removing thinking tags
-        # This prevents tokenizer errors when messages are re-passed through apply_chat_template
-        clean_response = response_text
-        if "<|message|>" in response_text and "<|end|>" in response_text:
-            # Extract only the final message after the last <|end|> tag
-            end_marker = response_text.rfind("<|end|>")
-            if end_marker != -1:
-                clean_response = response_text[end_marker + len("<|end|>"):].strip()
-        
-        # Remove any remaining message tags
-        clean_response = clean_response.replace("<|channel|>", "").replace("<|message|>", "").replace("<|end|>", "").strip()
-        
-        # Remove chat template artifacts (prefixes added by chat template formatting)
-        # Different models use different assistant role prefixes: "Start, Assistant", "Assistant:", "<|assistant|>", etc.
-        # This regex extracts the actual content after common role indicator patterns
-        import re
-        
-        # Match and remove common chat template role markers and delimiters at the start and end
-        # Examples: "<|start|>", "Start, Assistant", "Assistant:", "<|assistant|>", "[ASST]", etc.
-        chat_template_patterns = [
-            r"^<\|start\|>\s*",  # "<|start|>"
-            r"^[Ss]tart,\s*[Aa]ssistant\s*:?\s*",  # "Start, Assistant" or "start, assistant"
-            r"^[Aa]ssistant\s*:?\s*",  # "Assistant:" or "Assistant"
-            r"^<\|assistant\|>\s*",  # "<|assistant|>"
-            r"^\[ASST\]\s*",  # "[ASST]"
-            r"^<assistant>\s*",  # "<assistant>"
-        ]
-        
-        for pattern in chat_template_patterns:
-            if re.match(pattern, clean_response):
-                clean_response = re.sub(pattern, "", clean_response).strip()
-                break  # Only remove one prefix
-        
-        # Also remove trailing chat template markers
-        end_markers = [
-            r"\s*<\|end\|>$",
-            r"\s*<\|return\|>$",
-            r"\s*\[/ASST\]$",
-            r"\s*</assistant>$",
-        ]
-        
-        for pattern in end_markers:
-            if re.search(pattern, clean_response):
-                clean_response = re.sub(pattern, "", clean_response).strip()
-                break
+        # Parse the raw tokens using Harmony StreamableParser
+        parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
+        for tok in generated_tokens:
+            parser.process(tok)
+        try:
+            parser.process_eos()
+        except Exception:
+            pass  # EOS processing may fail if response is truncated
 
-        # Update conversation history
-        history.append({"role": "user", "content": text})
-        history.append({"role": "assistant", "content": clean_response})
+        parsed_messages = parser.messages
+
+        # Log all channels for debugging, extract "final" for response
+        clean_response = ""
+        for msg in parsed_messages:
+            # Extract text content from message
+            msg_text = ""
+            for content in msg.content:
+                if hasattr(content, "text"):
+                    msg_text = content.text.strip()
+                    break
+
+            if msg.channel == "final":
+                clean_response = msg_text
+            elif msg.channel in ("analysis", "commentary"):
+                # Log analysis/commentary channels (not read out)
+                self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
+
+        # Fallback: if no "final" channel found, use last message content
+        if not clean_response and parsed_messages:
+            last_msg = parsed_messages[-1]
+            for content in last_msg.content:
+                if hasattr(content, "text"):
+                    clean_response = content.text.strip()
+                    break
+
+        # If parsing failed entirely, decode raw tokens as fallback
+        if not clean_response:
+            clean_response = self.harmony.decode(generated_tokens)
+
+        # Update conversation history with Message objects
+        history.append(Message.from_role_and_content(Role.USER, text))
+        history.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
 
         # Keep only recent history (last 10 exchanges)
         if len(history) > 20:
