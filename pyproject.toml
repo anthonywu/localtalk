@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 authors = [
     {name = "Anthony Wu", email = "pls-file-gh-issue@users.noreply.github.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 keywords = [
   "apple-silicon",
   "llm",
