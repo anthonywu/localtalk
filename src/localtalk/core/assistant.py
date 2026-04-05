@@ -231,7 +231,7 @@ class VoiceAssistant:
                     output_device = devices[default_output]
                     init_messages.append(f"🔉 Output: {output_device['name']}")
                 live.update(create_panel())
-            except:  # noqa: E722
+            except Exception:
                 pass
 
             # Final update with all information
@@ -405,13 +405,20 @@ class VoiceAssistant:
         try:
             # Auto-listening mode: VAD enabled with auto_start
             if self.config.audio.use_vad and self.config.audio.vad_auto_start:
-                self.console.print("\n[cyan]🎤 Listening... (press Esc for keyboard input)[/cyan]")
+                # No extra "Listening..." print here — the VAD TUI displays its own status
                 sys.stdout.flush()
 
                 audio_data = self.audio.record_with_vad_auto()
 
-                if audio_data is None or audio_data.size == 0:
-                    # No speech detected - offer text input
+                if audio_data is None:
+                    # User pressed Esc — switch to text input
+                    user_input = self._get_text_input()
+                    if user_input:
+                        self._process_text_response(user_input)
+                    return True
+
+                if audio_data.size == 0:
+                    # No speech detected — offer text input
                     self.console.print("[dim]No speech detected.[/dim]")
                     user_input = self._get_text_input()
                     if user_input:
@@ -423,9 +430,9 @@ class VoiceAssistant:
 
             # Legacy prompt-first mode
             if self.config.audio.use_vad:
-                prompt = "\n[cyan]💬 Type message or Enter to listen (VAD enabled): [/cyan]"
+                prompt = "\n[cyan]Type message or Enter to listen (VAD enabled): [/cyan]"
             else:
-                prompt = "\n[cyan]💬 Type message or Enter to record: [/cyan]"
+                prompt = "\n[cyan]Type message or Enter to record: [/cyan]"
 
             user_input = self.console.input(prompt).strip()
             sys.stdout.flush()
@@ -436,22 +443,32 @@ class VoiceAssistant:
                 return True
 
             # Voice input mode
-            self.console.print("\n[bold cyan]🎤 Starting voice input...[/bold cyan]")
+            self.console.print("\n[bold cyan]Starting voice input...[/bold cyan]")
             time.sleep(0.1)
 
             if self.config.audio.use_vad:
                 audio_data = self.audio.record_with_vad()
+
+                if audio_data is None:
+                    # User pressed Esc
+                    user_input = self._get_text_input()
+                    if user_input:
+                        self._process_text_response(user_input)
+                    return True
             else:
-                self.console.print("[cyan]🎤 Recording... Press Enter to stop.")
+                self.console.print("[cyan]Recording... Press Enter to stop.")
                 stop_event = threading.Event()
-                recording_thread = threading.Thread(
-                    target=lambda: setattr(self, "_recorded_audio", self.audio.record_audio(stop_event)), daemon=True
-                )
+                result_queue = [None]
+
+                def _record():
+                    result_queue[0] = self.audio.record_audio(stop_event)
+
+                recording_thread = threading.Thread(target=_record, daemon=False)
                 recording_thread.start()
                 input()
                 stop_event.set()
-                recording_thread.join()
-                audio_data = getattr(self, "_recorded_audio", None)
+                recording_thread.join(timeout=5.0)
+                audio_data = result_queue[0]
 
             if audio_data is None or audio_data.size == 0:
                 self.console.print("[yellow]No audio recorded. Please speak clearly and try again.")

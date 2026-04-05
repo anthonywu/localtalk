@@ -25,7 +25,7 @@ class AudioService:
 
             self.sd = sd
         except ImportError as e:
-            self.console.print(f"[red]❌ Failed to import sounddevice: {e}")
+            self.console.print(f"[red]Failed to import sounddevice: {e}")
             self.console.print("[yellow]Try running: uv pip install sounddevice")
             raise SystemExit(1)  # noqa: B904
 
@@ -36,6 +36,9 @@ class AudioService:
             self._init_vad()
 
         self._check_audio_devices()
+
+        # Playback interrupt event
+        self._playback_stop = threading.Event()
 
     def _check_audio_devices(self):
         """Check and log audio device information."""
@@ -83,7 +86,7 @@ class AudioService:
             index = int(level * (len(WAVEFORM_BLOCKS) - 1))
             return WAVEFORM_BLOCKS[index]
 
-        self.console.print(f"\n[cyan]🎤 Testing microphone for {duration_seconds} seconds...[/cyan]")
+        self.console.print(f"\n[cyan]Testing microphone for {duration_seconds} seconds...[/cyan]")
         self.console.print("[dim]Speak into your microphone to test audio levels.[/dim]\n")
 
         # Get device info
@@ -196,7 +199,7 @@ class AudioService:
                     time.sleep(self.config.chunk_size / self.config.sample_rate)
 
         # Summary
-        self.console.print("\n[cyan]━━━ Microphone Test Results ━━━[/cyan]")
+        self.console.print("\n[cyan]--- Microphone Test Results ---[/cyan]")
         self.console.print(f"Peak level: {max_level:.3f}")
 
         if total_samples > 0:
@@ -205,40 +208,43 @@ class AudioService:
 
         # Diagnosis
         if max_level < 0.01:
-            self.console.print("\n[red]❌ NO AUDIO DETECTED[/red]")
+            self.console.print("\n[red]NO AUDIO DETECTED[/red]")
             self.console.print("[yellow]Possible causes:[/yellow]")
-            self.console.print("  • Microphone not connected or muted")
-            self.console.print("  • Wrong input device selected")
-            self.console.print("  • App lacks microphone permission")
-            self.console.print("  • Check: System Settings > Privacy & Security > Microphone")
+            self.console.print("  - Microphone not connected or muted")
+            self.console.print("  - Wrong input device selected")
+            self.console.print("  - App lacks microphone permission")
+            self.console.print("  - Check: System Settings > Privacy & Security > Microphone")
             return False
         elif max_level < 0.05:
-            self.console.print("\n[yellow]⚠️  VERY LOW AUDIO LEVELS[/yellow]")
+            self.console.print("\n[yellow]VERY LOW AUDIO LEVELS[/yellow]")
             self.console.print("[yellow]Suggestions:[/yellow]")
-            self.console.print("  • Speak louder or move closer to the microphone")
-            self.console.print("  • Check system input volume settings")
-            self.console.print("  • Try a different microphone")
+            self.console.print("  - Speak louder or move closer to the microphone")
+            self.console.print("  - Check system input volume settings")
+            self.console.print("  - Try a different microphone")
             return True
         else:
-            self.console.print("\n[green]✓ Microphone is working properly![/green]")
+            self.console.print("\n[green]Microphone is working properly![/green]")
             return True
 
     def _init_vad(self):
         """Initialize Silero VAD model."""
-        from silero_vad import VADIterator, load_silero_vad
+        try:
+            from silero_vad import VADIterator, load_silero_vad
 
-        self.console.print("[dim]Loading Silero VAD model...[/dim]")
-        # Load the model - let it fail if there's an issue
-        self.vad_model = load_silero_vad(onnx=True)
-        self.VADIterator = VADIterator
+            self.console.print("[dim]Loading Silero VAD model...[/dim]")
+            self.vad_model = load_silero_vad(onnx=True)
+            self.VADIterator = VADIterator
 
-        self.console.print("[dim]✓ VAD model loaded[/dim]")
+            self.console.print("[dim]VAD model loaded[/dim]")
 
-        # Test the model with supported chunk size (512 samples for 16kHz)
-        test_input = torch.zeros(512)
-        with torch.no_grad():
-            test_prob = self.vad_model(test_input, 16000).item()
-        self.console.print(f"[dim]✓ VAD test successful (test prob: {test_prob:.3f})[/dim]")
+            # Test the model with supported chunk size (512 samples for 16kHz)
+            test_input = torch.zeros(512)
+            with torch.no_grad():
+                test_prob = self.vad_model(test_input, 16000).item()
+            self.console.print(f"[dim]VAD test successful (test prob: {test_prob:.3f})[/dim]")
+        except Exception as e:
+            self.console.print(f"[yellow]VAD initialization failed: {e}[/yellow]")
+            self.vad_model = None
 
     def record_audio(self, stop_event: threading.Event) -> np.ndarray:
         """Record audio until stop event is set.
@@ -267,20 +273,28 @@ class AudioService:
             while not stop_event.is_set():
                 time.sleep(0.1)
 
-        # Process recorded data
-        audio_data = b"".join(list(data_queue.queue))
+        # Drain queue safely using thread-safe get()
+        chunks = []
+        while True:
+            try:
+                chunks.append(data_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        audio_data = b"".join(chunks)
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
 
-        return audio_np
+        return np.ascontiguousarray(audio_np)
 
     def play_audio(self, audio_array: np.ndarray, sample_rate: int | None = None):
-        """Play audio array.
+        """Play audio array with progress indication and interruptibility.
 
         Args:
             audio_array: Audio data as numpy array
             sample_rate: Sample rate (uses config default if not provided)
         """
         sample_rate = sample_rate or self.config.sample_rate
+        self._playback_stop.clear()
 
         # Ensure audio is in the correct format
         if audio_array.dtype != np.float32:
@@ -290,26 +304,39 @@ class AudioService:
         if np.abs(audio_array).max() > 1.0:
             audio_array = audio_array / np.abs(audio_array).max()
 
-        self.console.print("[cyan]🔊 Playing audio...")
+        duration = len(audio_array) / sample_rate
+        self.console.print(f"[cyan]Playing audio ({duration:.1f}s)...[/cyan]")
 
         try:
-            # Try to play with current default device
             self.sd.play(audio_array, sample_rate)
-            self.sd.wait()
+            # Wait with periodic checks for interrupt
+            while self.sd.get_stream().active:
+                if self._playback_stop.is_set():
+                    self.sd.stop()
+                    self.console.print("[yellow]Playback interrupted[/yellow]")
+                    return
+                time.sleep(0.1)
         except self.sd.PortAudioError as e:
             self.console.print(f"[yellow]Audio playback error: {e}")
             self.console.print("[yellow]Attempting fallback playback...")
 
-            # Try with different device settings
             try:
-                # Reset to default device
                 self.sd.default.reset()
                 self.sd.play(audio_array, sample_rate)
                 self.sd.wait()
             except Exception as e2:
-                # Final fallback: try to find a working output device
                 self.console.print(f"[yellow]Fallback failed: {e2}")
                 self._try_alternative_playback(audio_array, sample_rate)
+        except Exception:
+            # get_stream() may not be available; fall back to blocking wait
+            try:
+                self.sd.wait()
+            except Exception:
+                pass
+
+    def stop_playback(self):
+        """Signal playback to stop."""
+        self._playback_stop.set()
 
     def _try_alternative_playback(self, audio_array: np.ndarray, sample_rate: int):
         """Try alternative playback methods."""
@@ -324,8 +351,8 @@ class AudioService:
                     self.sd.play(audio_array, sample_rate, device=device_id)
                     self.sd.wait()
                     self.console.print("[green]Audio playback successful!")
-                    # Set as default for future playback
-                    self.sd.default.device[1] = device_id
+                    # Set working device as default for future playback
+                    self.sd.default.device = (self.sd.default.device[0], device_id)
                     return
                 except Exception:
                     continue
@@ -366,7 +393,7 @@ class AudioService:
             if callback:
                 callback(indata)
 
-        self.console.print("[cyan]🎤 Recording... (Will stop after silence)")
+        self.console.print("[cyan]Recording... (Will stop after silence)")
 
         with self.sd.InputStream(
             samplerate=self.config.sample_rate,
@@ -379,11 +406,15 @@ class AudioService:
                 time.sleep(0.1)
 
         # Combine chunks
-        audio_array = np.concatenate(chunks)
+        audio_array = np.ascontiguousarray(np.concatenate(chunks))
         return audio_array
 
-    def record_with_vad_auto(self) -> np.ndarray:
-        """Record audio automatically using VAD - starts immediately, no user input needed."""
+    def record_with_vad_auto(self) -> np.ndarray | None:
+        """Record audio automatically using VAD - starts immediately, no user input needed.
+
+        Returns:
+            Audio array, empty array if no speech, or None if user pressed Esc.
+        """
         if not self.config.use_vad:
             raise RuntimeError("VAD is disabled but record_with_vad_auto was called")
         if self.vad_model is None:
@@ -393,19 +424,17 @@ class AudioService:
 
         return record_with_vad_automatic(self)
 
-    def record_with_vad(self) -> np.ndarray:
+    def record_with_vad(self) -> np.ndarray | None:
         """Record audio using Voice Activity Detection with manual start.
 
         Press Enter to start recording, VAD will detect when you stop speaking.
 
         Returns:
-            Recorded speech as numpy array
+            Recorded speech as numpy array, or None if user pressed Esc.
         """
         if not self.config.use_vad:
             raise RuntimeError("VAD is disabled but record_with_vad was called")
         if self.vad_model is None:
             raise RuntimeError("VAD model is not loaded")
 
-        # For now, just use the automatic VAD recording
-        # In the future, we could implement a manual-start variant
         return self.record_with_vad_auto()
