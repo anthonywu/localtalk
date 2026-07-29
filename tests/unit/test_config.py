@@ -102,9 +102,34 @@ class TestAudioConfig:
         assert cfg.vad_threshold == 0.5
         assert cfg.vad_min_speech_duration_ms == 250
         assert cfg.vad_speech_pad_ms == 400
-        assert cfg.vad_silence_threshold_chunks == 64
+        assert cfg.vad_post_speech_silence_seconds == 2.0
         assert cfg.vad_max_recording_seconds == 120
         assert cfg.vad_initial_wait_seconds == 6.0
+
+    def test_vad_validation_rejects_wrong_sample_rate(self):
+        """Silero VAD requires 16kHz sample rate."""
+        with pytest.raises(ValueError, match="sample_rate=16000"):
+            AudioConfig(sample_rate=44100, use_vad=True, vad_auto_start=True)
+
+    def test_vad_validation_rejects_stereo(self):
+        """Silero VAD requires mono audio."""
+        with pytest.raises(ValueError, match="channels=1"):
+            AudioConfig(channels=2, use_vad=True, vad_auto_start=True)
+
+    def test_vad_validation_rejects_wrong_chunk_size(self):
+        """Silero VAD requires 512-sample chunks at 16kHz."""
+        with pytest.raises(ValueError, match="chunk_size=512"):
+            AudioConfig(chunk_size=1024, use_vad=True, vad_auto_start=True)
+
+    def test_vad_validation_allows_non_vad_config(self):
+        """When VAD is disabled, audio constraints are not enforced."""
+        cfg = AudioConfig(sample_rate=44100, channels=2, chunk_size=1024, use_vad=False)
+        assert cfg.sample_rate == 44100
+
+    def test_vad_validation_allows_vad_disabled_auto_start(self):
+        """When VAD auto_start is disabled, audio constraints are not enforced."""
+        cfg = AudioConfig(sample_rate=44100, use_vad=True, vad_auto_start=False)
+        assert cfg.sample_rate == 44100
 
 
 # ────────────────────────── AppConfig ──────────────────────────

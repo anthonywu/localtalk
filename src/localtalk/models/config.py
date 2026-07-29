@@ -1,9 +1,11 @@
 """Configuration models for the Local Talk App."""
 
+from __future__ import annotations
+
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReasoningLevel(str, Enum):
@@ -61,9 +63,23 @@ class AudioConfig(BaseModel):
     )
     vad_min_speech_duration_ms: int = Field(default=250, ge=0, description="Minimum speech duration in milliseconds")
     vad_speech_pad_ms: int = Field(default=400, ge=0, description="Speech padding in milliseconds")
-    vad_silence_threshold_chunks: int = Field(default=64, ge=1, description="Silence chunks to stop recording")
+    vad_post_speech_silence_seconds: float = Field(
+        default=2.0, ge=0.05, description="Seconds of silence after speech before stopping recording"
+    )
     vad_max_recording_seconds: int = Field(default=120, ge=1, description="Maximum recording duration in seconds")
     vad_initial_wait_seconds: float = Field(default=6.0, ge=0.0, description="Initial wait before timeout if no speech")
+
+    @model_validator(mode="after")
+    def _validate_vad_constraints(self) -> AudioConfig:
+        """Ensure audio settings are compatible with Silero VAD requirements."""
+        if self.use_vad and self.vad_auto_start:
+            if self.sample_rate != 16000:
+                raise ValueError("Silero VAD requires sample_rate=16000")
+            if self.channels != 1:
+                raise ValueError("Silero VAD requires channels=1 (mono)")
+            if self.chunk_size != 512:
+                raise ValueError("Silero VAD requires chunk_size=512 at 16kHz")
+        return self
 
 
 class AppConfig(BaseModel):
