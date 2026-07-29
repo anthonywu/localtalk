@@ -75,6 +75,16 @@ class TestParseArgs:
             args = parse_args()
         assert args.model == "custom/model"
 
+    def test_show_reasoning_flag(self):
+        with patch("sys.argv", ["localtalk", "--show-reasoning"]):
+            args = parse_args()
+        assert args.show_reasoning is True
+
+    def test_show_reasoning_default_false(self):
+        with patch("sys.argv", ["localtalk"]):
+            args = parse_args()
+        assert args.show_reasoning is False
+
     def test_numeric_args(self):
         with patch("sys.argv", ["localtalk", "--temperature", "0.3", "--max-tokens", "500", "--top-p", "0.9"]):
             args = parse_args()
@@ -117,7 +127,7 @@ class TestMain:
 
     def test_main_maps_model_args_to_config(self):
         mock_va_class, _ = self._run_main_with_mocks(
-            ["localtalk", "--model", "custom/model", "--temperature", "0.3", "--max-tokens", "500"]
+            ["localtalk", "--model", "custom/model", "--temperature", "0.3", "--max-tokens", "500"],
         )
         config: AppConfig = mock_va_class.call_args[0][0]
         assert config.mlx_lm.model == "custom/model"
@@ -164,7 +174,7 @@ class TestMain:
 
     def test_main_vad_threshold_and_timing(self):
         mock_va_class, _ = self._run_main_with_mocks(
-            ["localtalk", "--vad-threshold", "0.7", "--vad-min-speech-ms", "500"]
+            ["localtalk", "--vad-threshold", "0.7", "--vad-min-speech-ms", "500"],
         )
         config = mock_va_class.call_args[0][0]
         assert config.audio.vad_threshold == 0.7
@@ -174,7 +184,7 @@ class TestMain:
         prompt_file = tmp_path / "prompt.txt"
         prompt_file.write_text("Prompt from file.")
         mock_va_class, _ = self._run_main_with_mocks(
-            ["localtalk", "--system-prompt", "inline prompt", "--system-prompt-file", str(prompt_file)]
+            ["localtalk", "--system-prompt", "inline prompt", "--system-prompt-file", str(prompt_file)],
         )
         config = mock_va_class.call_args[0][0]
         assert config.system_prompt == "Prompt from file."

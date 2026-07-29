@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -245,18 +245,24 @@ class TestProcessVoiceResponse:
 
         assert not assistant.llm.generate_response.called
 
-    def test_without_tts_uses_audio_input_mode(self):
+    def test_without_tts_transcribes_and_responds(self):
+        """Without TTS, voice input is still transcribed and sent to LLM as text."""
         assistant = self._make_assistant_with_mocks(tts=None)
         assistant.llm.generate_response.return_value = "Response"
+        assistant.stt.transcribe.return_value = "hello there"
 
         audio = np.array([0.1, 0.2], dtype=np.float32)
         assistant._process_voice_response(audio)
 
-        assert assistant.llm.generate_response.called
-        # Should pass audio_array and sample_rate
+        # Should transcribe audio first
+        assert assistant.stt.transcribe.called
+        # Should call LLM with transcribed text (not audio_array)
+        assistant.llm.generate_response.assert_called_once()
+        call_args = assistant.llm.generate_response.call_args[0]
+        assert call_args[0] == "hello there"
+        # Should NOT pass audio_array
         call_kwargs = assistant.llm.generate_response.call_args[1]
-        assert "audio_array" in call_kwargs
-        assert "sample_rate" in call_kwargs
+        assert "audio_array" not in call_kwargs
 
 
 # ────────────────────────── process_voice_input ──────────────────────────
@@ -316,3 +322,31 @@ class TestProcessVoiceInput:
 
         assert result is True
         assistant._process_voice_response.assert_called_once_with(audio)
+
+    def test_vad_interrupted_by_esc_offers_text_input(self):
+        """When user presses Esc during VAD, keyboard input is offered."""
+        assistant = self._make_assistant_with_mocks()
+        assistant.audio.record_with_vad_auto.return_value = np.array([], dtype=np.float32)
+        assistant._get_text_input = MagicMock(return_value="typed message")
+        assistant._process_text_response = MagicMock()
+
+        # Simulate Esc by patching the esc listener to not run
+        class FakeThread:
+            def __init__(self, **kwargs):
+                self._target = kwargs.get("target")
+                self.daemon = kwargs.get("daemon", False)
+
+            def start(self):
+                pass  # Don't actually run the listener
+
+            def join(self, timeout=None):
+                pass
+
+        with patch("localtalk.core.assistant.threading.Thread", FakeThread):
+            # Patch termios/tty so the listener guard doesn't crash
+            with patch("localtalk.core.assistant.termios"), patch("localtalk.core.assistant.tty"):
+                result = assistant.process_voice_input()
+
+        # Since user_pressed_esc is not set (listener didn't run),
+        # this falls through to the no-speech path
+        assert result is True

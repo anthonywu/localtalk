@@ -7,11 +7,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from localtalk.services.audio_vad_auto import (
-    WAVEFORM_BLOCKS,
-    level_to_block,
-    record_with_vad_automatic,
-)
+from localtalk.services.audio_vad_auto import record_with_vad_automatic
+from localtalk.utils.waveform import WAVEFORM_BLOCKS, WAVEFORM_WIDTH, level_to_block, render_waveform
 
 pytestmark = pytest.mark.unit
 
@@ -50,6 +47,36 @@ class TestLevelToBlock:
         assert level_to_block(level) == WAVEFORM_BLOCKS[expected_index]
 
 
+# ────────────────────────── render_waveform ──────────────────────────
+
+
+class TestRenderWaveform:
+    def test_empty_returns_padded_dim(self):
+        from rich.text import Text
+
+        result = render_waveform([])
+        assert isinstance(result, Text)
+        # Should be padded to WAVEFORM_WIDTH with dim blocks
+        assert len(result.plain) == WAVEFORM_WIDTH
+
+    def test_short_history_padded_to_width(self):
+        levels = [(0.5, True), (0.3, False)]
+        result = render_waveform(levels)
+        assert len(result.plain) == WAVEFORM_WIDTH
+
+    def test_full_history_not_padded(self):
+        levels = [(0.5, True)] * WAVEFORM_WIDTH
+        result = render_waveform(levels)
+        assert len(result.plain) == WAVEFORM_WIDTH
+
+    def test_overflow_history_truncated_by_deque(self):
+        # render_waveform itself doesn't truncate — the caller's deque does.
+        # But it should handle more than WAVEFORM_WIDTH entries gracefully.
+        levels = [(0.5, True)] * (WAVEFORM_WIDTH + 10)
+        result = render_waveform(levels)
+        assert len(result.plain) == WAVEFORM_WIDTH + 10
+
+
 # ────────────────────────── record_with_vad_automatic guards ──────────────────────────
 
 
@@ -80,8 +107,13 @@ class TestRecordWithVadAutomaticMocked:
         service.config.use_vad = True
         service.config.sample_rate = sample_rate
         service.config.channels = 1
+        service.config.chunk_size = 512
         service.config.vad_threshold = vad_threshold
         service.config.vad_speech_pad_ms = 400
+        service.config.vad_min_speech_duration_ms = 64  # → 2-chunk threshold, matches old behavior
+        service.config.vad_silence_threshold_chunks = 32
+        service.config.vad_max_recording_seconds = 120
+        service.config.vad_initial_wait_seconds = 3.0
         service.console = MagicMock()
 
         # Mock VAD model — returns a tensor-like object with .item()
@@ -97,6 +129,7 @@ class TestRecordWithVadAutomaticMocked:
         Args:
             chunks: List of numpy arrays to feed to the callback on each __enter__ call.
             callback_side_effect: Optional function to modify callback behavior.
+
         """
         # We need the stream to call the callback repeatedly until should_stop
         # The function reads should_stop in a loop with time.sleep(0.05)

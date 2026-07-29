@@ -23,7 +23,7 @@ We deliberately chose not to use macOS's built-in `say` command for text-to-spee
 
 Apple's newer [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) offers much higher quality voices that could be a great fit for this project. However, we're waiting for proper Python library support to integrate it. Once Python bindings become available, we'll add support for these modern Apple voices as another local TTS option.
 
-Built with speech recognition (Whisper), language model processing (Gemma3/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
+Built with speech recognition (Whisper), language model processing (gpt-oss/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
 
 ## Why "LocalTalk"?
 
@@ -40,7 +40,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 
 - 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
 - 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD
-- 🤖 **Native Audio Processing**: Gemma3 model with direct audio understanding
+- 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 💬 **Dual Input Modes**: Type or speak your queries
 - 💾 **Fully Offline**: No internet connection required after setup
@@ -130,7 +130,7 @@ This will:
 1. Start with ChatterBox Turbo TTS
 2. Use the `mlx-community/gpt-oss-20b-MXFP4-Q8` model
 3. Enable dual-modal input (type or speak)
-4. Use `base.en` Whisper model for speech recognition
+4. Use `turbo` Whisper model for speech recognition
 5. Enable Voice Activity Detection (VAD) for automatic speech detection
 
 ### Complete Hello World Example
@@ -191,7 +191,7 @@ localtalk
 **Primary AI Model Options:**
 
 - `--model NAME`: MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8)
-- `--whisper-model SIZE`: Whisper model size (default: base.en)
+- `--whisper-model SIZE`: Whisper model size (default: turbo)
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)
 - `--max-tokens INT`: Maximum tokens to generate (default: 100)
@@ -329,12 +329,12 @@ MIT License - see LICENSE file for details.
 
 ### Language Support
 
-Currently, LocalTalk supports English (American and British accents). **Chinese language support is coming next**, with other major world languages to follow. The underlying models (Whisper, Gemma3, and Kokoro) already have multilingual capabilities - we just need to wire up the language detection and configuration.
+Currently, LocalTalk supports English (American and British accents). **Chinese language support is coming next**, with other major world languages to follow. The underlying models (Whisper, gpt-oss, and ChatterBox) already have multilingual capabilities - we just need to wire up the language detection and configuration.
 
 **Contributors welcome!** If you'd like to help add support for your language, please check our [Issues](https://github.com/anthonywu/localtalk/issues) page or submit a PR. Language additions mainly involve:
 
 - Configuring Whisper for the target language
-- Testing Gemma3's response quality in that language
+- Testing gpt-oss response quality in that language
 - Setting up ChatterBox TTS with appropriate voice models
 - Adding language-specific prompts and examples
 

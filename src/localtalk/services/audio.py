@@ -3,13 +3,13 @@
 import queue
 import threading
 import time
-from collections.abc import Callable
 
 import numpy as np
 import torch
 from rich.console import Console
 
 from localtalk.models.config import AudioConfig
+from localtalk.utils.waveform import WAVEFORM_WIDTH, level_to_block
 
 
 class AudioService:
@@ -31,7 +31,6 @@ class AudioService:
 
         # Initialize VAD if enabled
         self.vad_model = None
-        self.vad_iterator = None
         if self.config.use_vad:
             self._init_vad()
 
@@ -73,16 +72,6 @@ class AudioService:
         from rich.table import Table
         from rich.text import Text
 
-        # Waveform constants
-        WAVEFORM_WIDTH = 60
-        WAVEFORM_BLOCKS = " ▁▂▃▄▅▆▇█"
-
-        def level_to_block(level: float) -> str:
-            level = min(1.0, max(0.0, level))
-            level = level**0.5  # Square root for better visibility
-            index = int(level * (len(WAVEFORM_BLOCKS) - 1))
-            return WAVEFORM_BLOCKS[index]
-
         self.console.print(f"\n[cyan]🎤 Testing microphone for {duration_seconds} seconds...[/cyan]")
         self.console.print("[dim]Speak into your microphone to test audio levels.[/dim]\n")
 
@@ -114,8 +103,7 @@ class AudioService:
             # Calculate level
             level = np.abs(indata).max()
             current_level = float(level)
-            if level > max_level:
-                max_level = level
+            max_level = max(max_level, level)
             if level > 0.01:  # Threshold for "real" audio
                 samples_with_audio += 1
             total_samples += 1
@@ -171,7 +159,7 @@ class AudioService:
                 status_text = "Strong"
 
             table.add_row(
-                f"    [{color}]{indicator}[/{color}] Level: {current_level:.3f} ({status_text})  Peak: {max_level:.3f}"
+                f"    [{color}]{indicator}[/{color}] Level: {current_level:.3f} ({status_text})  Peak: {max_level:.3f}",
             )
 
             return table
@@ -212,25 +200,23 @@ class AudioService:
             self.console.print("  • App lacks microphone permission")
             self.console.print("  • Check: System Settings > Privacy & Security > Microphone")
             return False
-        elif max_level < 0.05:
+        if max_level < 0.05:
             self.console.print("\n[yellow]⚠️  VERY LOW AUDIO LEVELS[/yellow]")
             self.console.print("[yellow]Suggestions:[/yellow]")
             self.console.print("  • Speak louder or move closer to the microphone")
             self.console.print("  • Check system input volume settings")
             self.console.print("  • Try a different microphone")
             return True
-        else:
-            self.console.print("\n[green]✓ Microphone is working properly![/green]")
-            return True
+        self.console.print("\n[green]✓ Microphone is working properly![/green]")
+        return True
 
     def _init_vad(self):
         """Initialize Silero VAD model."""
-        from silero_vad import VADIterator, load_silero_vad
+        from silero_vad import load_silero_vad
 
         self.console.print("[dim]Loading Silero VAD model...[/dim]")
         # Load the model - let it fail if there's an issue
         self.vad_model = load_silero_vad(onnx=True)
-        self.VADIterator = VADIterator
 
         self.console.print("[dim]✓ VAD model loaded[/dim]")
 
@@ -248,6 +234,7 @@ class AudioService:
 
         Returns:
             Recorded audio as numpy array
+
         """
         data_queue: queue.Queue[bytes] = queue.Queue()
 
@@ -279,6 +266,7 @@ class AudioService:
         Args:
             audio_array: Audio data as numpy array
             sample_rate: Sample rate (uses config default if not provided)
+
         """
         sample_rate = sample_rate or self.config.sample_rate
 
@@ -327,62 +315,15 @@ class AudioService:
                     # Set as default for future playback
                     self.sd.default.device[1] = device_id
                     return
-                except Exception:
+                except Exception as e:
+                    self.console.print(f"[dim]Device {device_id} failed: {e}[/dim]")
                     continue
 
             self.console.print("[red]Could not find working audio output device")
         except Exception as e:
             self.console.print(f"[red]Failed to play audio: {e}")
 
-    def record_with_silence_detection(self, callback: Callable[[np.ndarray], None] | None = None) -> np.ndarray:
-        """Record audio with automatic silence detection.
-
-        Args:
-            callback: Optional callback for real-time audio chunks
-
-        Returns:
-            Recorded audio as numpy array
-        """
-        chunks = []
-        silence_chunks = 0
-        max_silence_chunks = int(self.config.silence_duration * self.config.sample_rate / self.config.chunk_size)
-
-        def audio_callback(indata, frames, time_info, status):
-            if status:
-                self.console.print(f"[red]Audio recording status: {status}")
-
-            # Calculate RMS
-            rms = np.sqrt(np.mean(indata**2))
-
-            # Check for silence
-            if rms < self.config.silence_threshold:
-                nonlocal silence_chunks
-                silence_chunks += 1
-            else:
-                silence_chunks = 0
-
-            chunks.append(indata.copy())
-
-            if callback:
-                callback(indata)
-
-        self.console.print("[cyan]🎤 Recording... (Will stop after silence)")
-
-        with self.sd.InputStream(
-            samplerate=self.config.sample_rate,
-            channels=self.config.channels,
-            dtype="float32",
-            callback=audio_callback,
-            blocksize=self.config.chunk_size,
-        ):
-            while silence_chunks < max_silence_chunks:
-                time.sleep(0.1)
-
-        # Combine chunks
-        audio_array = np.concatenate(chunks)
-        return audio_array
-
-    def record_with_vad_auto(self) -> np.ndarray:
+    def record_with_vad_auto(self, interrupt_check=None) -> np.ndarray:
         """Record audio automatically using VAD - starts immediately, no user input needed."""
         if not self.config.use_vad:
             raise RuntimeError("VAD is disabled but record_with_vad_auto was called")
@@ -391,21 +332,13 @@ class AudioService:
 
         from localtalk.services.audio_vad_auto import record_with_vad_automatic
 
-        return record_with_vad_automatic(self)
+        return record_with_vad_automatic(self, interrupt_check=interrupt_check)
 
     def record_with_vad(self) -> np.ndarray:
-        """Record audio using Voice Activity Detection with manual start.
-
-        Press Enter to start recording, VAD will detect when you stop speaking.
-
-        Returns:
-            Recorded speech as numpy array
-        """
+        """Record audio using automatic Voice Activity Detection."""
         if not self.config.use_vad:
             raise RuntimeError("VAD is disabled but record_with_vad was called")
         if self.vad_model is None:
             raise RuntimeError("VAD model is not loaded")
 
-        # For now, just use the automatic VAD recording
-        # In the future, we could implement a manual-start variant
         return self.record_with_vad_auto()

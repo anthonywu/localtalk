@@ -55,16 +55,14 @@ class MLXLanguageModelService:
                 spinner="dots",
             ):
                 from mlx_lm import load, stream_generate
+                from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
                 self.stream_generate = stream_generate
+                self._make_sampler = make_sampler
+                self._make_logits_processors = make_logits_processors
                 self.model, self.tokenizer = load(self.config.model)
-                try:
-                    self.config_obj = self.model.config
-                except AttributeError:
-                    self.config_obj = None
             self.console.print("[green]Model loaded successfully!")
-        except (ImportError, Exception) as e:
-            # Always use the main console for critical errors
+        except Exception as e:
             from rich.console import Console
 
             error_console = Console()
@@ -73,7 +71,7 @@ class MLXLanguageModelService:
                 error_console.print("[red]MLX requires macOS with Apple Silicon (M1/M2/M3).")
             else:
                 error_console.print("[yellow]Try running: uv pip install mlx-lm")
-            raise SystemExit(1)  # noqa: B904
+            raise SystemExit(1) from e
 
     def _init_harmony(self):
         """Initialize the Harmony encoding for chat template rendering and parsing."""
@@ -99,6 +97,7 @@ class MLXLanguageModelService:
         Raises:
             ValueError: If audio array is invalid
             OSError: If unable to write file
+
         """
         # Validate audio array
         if audio_array is None or audio_array.size == 0:
@@ -156,6 +155,7 @@ class MLXLanguageModelService:
 
         Returns:
             Generated response text
+
         """
         # Get conversation history
         history = self._get_session_history(session_id)
@@ -210,6 +210,16 @@ class MLXLanguageModelService:
 
         # Generate response using stream_generate to collect raw tokens
         # This preserves special tokens that would be lost in decoded text
+        # Build sampler and logits processors using the mlx_lm API
+        sampler = self._make_sampler(
+            temp=self.config.temperature,
+            top_p=self.config.top_p,
+        )
+        logits_processors = self._make_logits_processors(
+            repetition_penalty=self.config.repetition_penalty,
+            repetition_context_size=self.config.repetition_context_size,
+        )
+
         generated_tokens: list[int] = []
         with self.console.status("Generating response...", spinner="dots"):
             for response in self.stream_generate(
@@ -217,6 +227,8 @@ class MLXLanguageModelService:
                 self.tokenizer,
                 prompt=prompt_tokens,
                 max_tokens=self.config.max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
             ):
                 generated_tokens.append(response.token)
 
@@ -232,7 +244,7 @@ class MLXLanguageModelService:
         if debug_mode:
             raw_text = self.harmony.decode(generated_tokens)
             self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
-            self.console.print(f"[dim]{repr(raw_text)}[/dim]")
+            self.console.print(f"[dim]{raw_text!r}[/dim]")
 
         # Parse the raw tokens using Harmony StreamableParser
         parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
@@ -265,29 +277,36 @@ class MLXLanguageModelService:
             if msg.channel == "final":
                 clean_response = msg_text
             elif msg.channel in ("analysis", "commentary"):
-                # Log analysis/commentary channels (not read out)
-                if not debug_mode:
+                # Only show reasoning channels if explicitly enabled
+                if debug_mode or self.config.show_reasoning:
                     self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
 
-        # Fallback: if no "final" channel found, use last message content
+        # Fallback: if no "final" channel found, use last non-reasoning message content
         if not clean_response and parsed_messages:
-            last_msg = parsed_messages[-1]
-            for content in last_msg.content:
-                if hasattr(content, "text"):
-                    clean_response = content.text.strip()
+            for msg in reversed(parsed_messages):
+                if msg.channel in ("analysis", "commentary"):
+                    continue
+                for content in msg.content:
+                    if hasattr(content, "text") and content.text.strip():
+                        clean_response = content.text.strip()
+                        break
+                if clean_response:
                     break
 
-        # If parsing failed entirely, decode raw tokens as fallback
+        # Safe fallback: if no final/non-reasoning content was parsed, do not
+        # return raw decoded tokens (which may contain reasoning/channel markup)
+        # to TTS — use a neutral spoken fallback instead.
         if not clean_response:
-            clean_response = self.harmony.decode(generated_tokens)
+            clean_response = "I'm sorry, I couldn't produce a response."
 
         # Update conversation history with Message objects
         history.append(Message.from_role_and_content(Role.USER, text))
         history.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
 
-        # Keep only recent history (last 10 exchanges)
-        if len(history) > 20:
-            self.chat_history[session_id] = history[-20:]
+        # Keep only recent history
+        max_msgs = self.config.history_max_messages
+        if len(history) > max_msgs:
+            self.chat_history[session_id] = history[-max_msgs:]
         else:
             self.chat_history[session_id] = history
 

@@ -75,7 +75,7 @@ class TestSynthesize:
         np.testing.assert_allclose(audio, [0.5, -0.5, 0.0])
 
     def test_returns_first_result_only(self):
-        """synthesize returns only the first result's audio."""
+        """Synthesize returns only the first result's audio."""
         model = MagicMock()
         r1 = MagicMock()
         r1.audio = _FakeMlxArray([0.1, 0.2])

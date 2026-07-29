@@ -9,15 +9,10 @@ from localtalk.models.config import ChatterBoxConfig
 class MLXTextToSpeechService:
     """Service for converting text to speech using mlx-audio TTS models."""
 
-    def __init__(
-        self,
-        config: ChatterBoxConfig,
-        console: Console | None = None,
-        model_id: str = "mlx-community/chatterbox-turbo-4bit",
-    ):
+    def __init__(self, config: ChatterBoxConfig, console: Console | None = None):
         self.config = config
         self.console = console or Console()
-        self.model_id = model_id
+        self.model_id = config.model_id
         self.model = self._load_model()
         self.sample_rate = self.model.sample_rate
 
@@ -28,6 +23,15 @@ class MLXTextToSpeechService:
         self.console.print(f"[cyan]Loading TTS model: {self.model_id}[/cyan]")
         return load_model(model_path=self.model_id)
 
+    @staticmethod
+    def _to_numpy_audio(audio) -> np.ndarray:
+        """Convert MLX or other audio array to float32 numpy."""
+        if hasattr(audio, "tolist"):
+            return np.array(audio.tolist(), dtype=np.float32)
+        if not isinstance(audio, np.ndarray):
+            return np.array(audio, dtype=np.float32)
+        return audio.astype(np.float32)
+
     def synthesize(self, text: str) -> tuple[int, np.ndarray]:
         """Synthesize speech from text.
 
@@ -36,17 +40,13 @@ class MLXTextToSpeechService:
 
         Returns:
             Tuple of (sample_rate, audio_array)
+
         """
         results = list(self.model.generate(text=text, verbose=False))
         if not results:
             return self.sample_rate, np.array([], dtype=np.float32)
 
-        audio = results[0].audio
-        # Convert mlx array to numpy if needed
-        if hasattr(audio, "tolist"):
-            audio = np.array(audio.tolist(), dtype=np.float32)
-        elif not isinstance(audio, np.ndarray):
-            audio = np.array(audio, dtype=np.float32)
+        audio = self._to_numpy_audio(results[0].audio)
 
         return self.sample_rate, audio
 
@@ -60,16 +60,16 @@ class MLXTextToSpeechService:
 
         Returns:
             Tuple of (sample_rate, audio_array)
+
         """
         pieces = []
-        silence = np.zeros(int(0.25 * self.sample_rate), dtype=np.float32)
+        silence = np.zeros(
+            int(self.config.silence_between_pieces_ms / 1000 * self.sample_rate),
+            dtype=np.float32,
+        )
 
         for result in self.model.generate(text=text, verbose=False):
-            audio = result.audio
-            if hasattr(audio, "tolist"):
-                audio = np.array(audio.tolist(), dtype=np.float32)
-            elif not isinstance(audio, np.ndarray):
-                audio = np.array(audio, dtype=np.float32)
+            audio = self._to_numpy_audio(result.audio)
             pieces.extend([audio, silence.copy()])
 
         if not pieces:

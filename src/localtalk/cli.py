@@ -2,16 +2,9 @@
 
 import argparse
 import os
-import warnings
 
-# Disable Hugging Face telemetry to ensure complete offline/private capabiliity
+# Disable Hugging Face telemetry to ensure complete offline/private capability
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-
-# Suppress the pkg_resources deprecation warning from perth module
-warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
-
-# Suppress torch.backends.cuda.sdp_kernel deprecation warning
-warnings.filterwarnings("ignore", message="torch.backends.cuda.sdp_kernel\\(\\) is deprecated", category=FutureWarning)
 
 from localtalk.core.assistant import VoiceAssistant  # noqa: E402
 from localtalk.models.config import AppConfig  # noqa: E402
@@ -46,7 +39,7 @@ def parse_args():
             "large-v3",
             "turbo",
         ],
-        help="Whisper model size. English-only (.en) models perform better for English. Sizes: tiny (39M), base (74M), small (244M), medium (769M), large (1550M), turbo (798M, fast). Default: base.en",
+        help="Whisper model size. English-only (.en) models perform better for English. Sizes: tiny (39M), base (74M), small (244M), medium (769M), large (1550M), turbo (798M, fast). Default: turbo",
     )
 
     # MLX-LM configuration
@@ -85,6 +78,13 @@ def parse_args():
         "--no-tts",
         action="store_true",
         help="Disable TTS and use text-only mode",
+    )
+
+    # Reasoning visibility
+    parser.add_argument(
+        "--show-reasoning",
+        action="store_true",
+        help="Show analysis/commentary reasoning channels in terminal output (hidden by default)",
     )
 
     # Performance monitoring
@@ -202,6 +202,9 @@ def main():
 
     # Enable stats if requested
     config.show_stats = args.stats
+
+    # Show reasoning channels if requested (hidden by default to reduce robotic commentary)
+    config.mlx_lm.show_reasoning = args.show_reasoning
 
     # Handle VAD configuration with --vad-mode flag
     if args.vad_mode == "auto":

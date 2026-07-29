@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -45,7 +43,7 @@ class TestReasoningLevel:
 class TestWhisperConfig:
     def test_defaults(self):
         cfg = WhisperConfig()
-        assert cfg.model_size == "base.en"
+        assert cfg.model_size == "turbo"
         assert cfg.device is None
         assert cfg.language == "en"
 
@@ -63,6 +61,11 @@ class TestMLXLMConfig:
         assert cfg.repetition_penalty == 1.0
         assert cfg.repetition_context_size == 20
         assert cfg.reasoning_effort == ReasoningLevel.LOW
+        assert cfg.history_max_messages == 20
+
+    def test_show_reasoning_default_false(self):
+        cfg = MLXLMConfig()
+        assert cfg.show_reasoning is False
 
 
 # ────────────────────────── ChatterBoxConfig ──────────────────────────
@@ -71,53 +74,16 @@ class TestMLXLMConfig:
 class TestChatterBoxConfig:
     def test_defaults(self):
         cfg = ChatterBoxConfig()
-        assert cfg.device is None
-        assert cfg.voice_sample_path is None
-        assert cfg.exaggeration == 0.5
-        assert cfg.cfg_weight == 0.5
-        assert cfg.save_voice_samples is False
-        assert cfg.voice_output_dir == Path("audio-output-cache")
-        assert cfg.fast_mode is True
+        assert cfg.model_id == "mlx-community/chatterbox-turbo-4bit"
+        assert cfg.silence_between_pieces_ms == 250
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("exaggeration", -0.1),
-            ("exaggeration", 1.1),
-            ("cfg_weight", -0.1),
-            ("cfg_weight", 1.1),
-        ],
-    )
-    def test_range_validation_rejects_out_of_bounds(self, field, value):
-        with pytest.raises(ValidationError, match="between 0.0 and 1.0"):
-            ChatterBoxConfig(**{field: value})
+    def test_custom_model_id(self):
+        cfg = ChatterBoxConfig(model_id="mlx-community/custom-model")
+        assert cfg.model_id == "mlx-community/custom-model"
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("exaggeration", 0.0),
-            ("exaggeration", 1.0),
-            ("cfg_weight", 0.0),
-            ("cfg_weight", 1.0),
-        ],
-    )
-    def test_range_validation_accepts_boundary_values(self, field, value):
-        cfg = ChatterBoxConfig(**{field: value})
-        assert getattr(cfg, field) == value
-
-    def test_voice_sample_path_valid(self, tmp_path):
-        sample = tmp_path / "voice.wav"
-        sample.write_bytes(b"fake audio")
-        cfg = ChatterBoxConfig(voice_sample_path=sample)
-        assert cfg.voice_sample_path == sample
-
-    def test_voice_sample_path_nonexistent_raises(self):
-        with pytest.raises(ValidationError, match="Voice sample file not found"):
-            ChatterBoxConfig(voice_sample_path=Path("/nonexistent/voice.wav"))
-
-    def test_voice_sample_path_none_ok(self):
-        cfg = ChatterBoxConfig(voice_sample_path=None)
-        assert cfg.voice_sample_path is None
+    def test_silence_validation_rejects_negative(self):
+        with pytest.raises(ValidationError):
+            ChatterBoxConfig(silence_between_pieces_ms=-1)
 
 
 # ────────────────────────── AudioConfig ──────────────────────────
@@ -136,6 +102,9 @@ class TestAudioConfig:
         assert cfg.vad_threshold == 0.5
         assert cfg.vad_min_speech_duration_ms == 250
         assert cfg.vad_speech_pad_ms == 400
+        assert cfg.vad_silence_threshold_chunks == 32
+        assert cfg.vad_max_recording_seconds == 120
+        assert cfg.vad_initial_wait_seconds == 3.0
 
 
 # ────────────────────────── AppConfig ──────────────────────────

@@ -189,6 +189,8 @@ class TestGenerateResponse:
         service.model = MagicMock()
         service.tokenizer = MagicMock()
         service.stream_generate = MagicMock(return_value=iter([]))
+        service._make_sampler = MagicMock(return_value=MagicMock())
+        service._make_logits_processors = MagicMock(return_value=None)
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded fallback"
@@ -201,7 +203,8 @@ class TestGenerateResponse:
         fake_parser.messages = []
         monkeypatch.setattr("localtalk.services.mlx_llm.StreamableParser", lambda *a, **kw: fake_parser)
         monkeypatch.setattr(
-            "localtalk.services.mlx_llm.Conversation.from_messages", MagicMock(return_value=MagicMock())
+            "localtalk.services.mlx_llm.Conversation.from_messages",
+            MagicMock(return_value=MagicMock()),
         )
         return fake_parser
 
@@ -262,3 +265,126 @@ class TestGenerateResponse:
         assert len(service.chat_history["s1"]) == 2
         service.clear_history("s1")
         assert "s1" not in service.chat_history
+
+
+# ────────────────────────── reasoning channel filtering ──────────────────────────
+
+
+class TestReasoningChannelFiltering:
+    """Verify analysis/commentary is hidden by default and never reaches TTS."""
+
+    def _make_service(self, show_reasoning: bool = False):
+        from openai_harmony import ReasoningEffort
+
+        from localtalk.services.mlx_llm import MLXLanguageModelService
+
+        config = MLXLMConfig(max_tokens=50)
+        config.show_reasoning = show_reasoning
+        service = MLXLanguageModelService.__new__(MLXLanguageModelService)
+        service.config = config
+        service.console = Console()
+        service.system_prompt = "test prompt"
+        service.chat_history = {}
+        service.reasoning_effort = ReasoningEffort.LOW
+        service.model = MagicMock()
+        service.tokenizer = MagicMock()
+        service.stream_generate = MagicMock(return_value=iter([]))
+        service._make_sampler = MagicMock(return_value=MagicMock())
+        service._make_logits_processors = MagicMock(return_value=None)
+        service.harmony = MagicMock()
+        service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
+        service.harmony.decode.return_value = "RAW_REAS_NO_FINAL"
+        return service
+
+    def _patch_parser(self, monkeypatch, messages):
+        """Patch StreamableParser to inject pre-built parsed messages."""
+        fake_parser = MagicMock()
+        fake_parser.messages = messages
+        monkeypatch.setattr("localtalk.services.mlx_llm.StreamableParser", lambda *a, **kw: fake_parser)
+        monkeypatch.setattr(
+            "localtalk.services.mlx_llm.Conversation.from_messages",
+            MagicMock(return_value=MagicMock()),
+        )
+        return fake_parser
+
+    def _msg(self, channel: str, text: str):
+        from openai_harmony import Message, Role
+
+        return Message.from_role_and_content(Role.ASSISTANT, text).with_channel(channel)
+
+    def test_final_channel_returned(self, monkeypatch):
+        service = self._make_service()
+        self._patch_parser(monkeypatch, [self._msg("analysis", "thinking..."), self._msg("final", "Hello!")])
+        result = service.generate_response("hi")
+        assert result == "Hello!"
+
+    def test_analysis_not_returned_when_no_final(self, monkeypatch):
+        """Missing final must not fall back to analysis/commentary."""
+        service = self._make_service()
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("analysis", "internal thought"), self._msg("commentary", "meta commentary")],
+        )
+        result = service.generate_response("hi")
+        assert "internal thought" not in result
+        assert "meta commentary" not in result
+        # Safe fallback used instead
+        assert result == "I'm sorry, I couldn't produce a response."
+
+    def test_raw_decode_not_used_as_fallback(self, monkeypatch):
+        """When no final/non-reasoning content exists, raw decoded tokens must not leak."""
+        service = self._make_service()
+        self._patch_parser(monkeypatch, [])
+        result = service.generate_response("hi")
+        assert result != "RAW_REAS_NO_FINAL"
+        assert "sorry" in result.lower()
+
+    def test_non_reasoning_channel_used_as_fallback(self, monkeypatch):
+        """If no final, a non-reasoning channel (e.g. tool) can be used."""
+        service = self._make_service()
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("analysis", "thinking"), self._msg("tool", "tool output here")],
+        )
+        result = service.generate_response("hi")
+        assert result == "tool output here"
+
+    def test_commentary_not_printed_by_default(self, monkeypatch, capsys):
+        service = self._make_service(show_reasoning=False)
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("commentary", "secret meta"), self._msg("final", "spoken reply")],
+        )
+        service.generate_response("hi")
+        out = capsys.readouterr().out
+        assert "secret meta" not in out
+
+    def test_analysis_not_printed_by_default(self, monkeypatch, capsys):
+        service = self._make_service(show_reasoning=False)
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("analysis", "secret thinking"), self._msg("final", "spoken reply")],
+        )
+        service.generate_response("hi")
+        out = capsys.readouterr().out
+        assert "secret thinking" not in out
+
+    def test_commentary_printed_when_show_reasoning(self, monkeypatch, capsys):
+        service = self._make_service(show_reasoning=True)
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("commentary", "visible meta"), self._msg("final", "spoken reply")],
+        )
+        service.generate_response("hi")
+        out = capsys.readouterr().out
+        assert "visible meta" in out
+
+    def test_analysis_printed_when_show_reasoning(self, monkeypatch, capsys):
+        service = self._make_service(show_reasoning=True)
+        self._patch_parser(
+            monkeypatch,
+            [self._msg("analysis", "visible thinking"), self._msg("final", "spoken reply")],
+        )
+        service.generate_response("hi")
+        out = capsys.readouterr().out
+        assert "visible thinking" in out
