@@ -9,8 +9,9 @@ warnings.filterwarnings("ignore", message="pkg_resources is deprecated", categor
 # Suppress torch.backends.cuda.sdp_kernel deprecation warning
 warnings.filterwarnings("ignore", message="torch.backends.cuda.sdp_kernel\\(\\) is deprecated", category=FutureWarning)
 
-# Suppress mlx.metal.device_info deprecation warning
-warnings.filterwarnings("ignore", message=".*device_info is deprecated.*", category=DeprecationWarning)
+# Note: mx.metal.device_info deprecation is handled in mlx_compat.py by
+# redirecting to mx.device_info, since MLX prints it at the C++ level
+# (bypassing Python's warnings module).
 
 # Suppress tokenizers parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

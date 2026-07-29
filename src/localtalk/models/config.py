@@ -61,9 +61,9 @@ class AudioConfig(BaseModel):
     )
     vad_min_speech_duration_ms: int = Field(default=250, ge=0, description="Minimum speech duration in milliseconds")
     vad_speech_pad_ms: int = Field(default=400, ge=0, description="Speech padding in milliseconds")
-    vad_silence_threshold_chunks: int = Field(default=32, ge=1, description="Silence chunks to stop recording")
+    vad_silence_threshold_chunks: int = Field(default=64, ge=1, description="Silence chunks to stop recording")
     vad_max_recording_seconds: int = Field(default=120, ge=1, description="Maximum recording duration in seconds")
-    vad_initial_wait_seconds: float = Field(default=3.0, ge=0.0, description="Initial wait before timeout if no speech")
+    vad_initial_wait_seconds: float = Field(default=6.0, ge=0.0, description="Initial wait before timeout if no speech")
 
 
 class AppConfig(BaseModel):

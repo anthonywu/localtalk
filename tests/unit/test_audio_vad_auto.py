@@ -111,9 +111,9 @@ class TestRecordWithVadAutomaticMocked:
         service.config.vad_threshold = vad_threshold
         service.config.vad_speech_pad_ms = 400
         service.config.vad_min_speech_duration_ms = 64  # → 2-chunk threshold, matches old behavior
-        service.config.vad_silence_threshold_chunks = 32
+        service.config.vad_silence_threshold_chunks = 64
         service.config.vad_max_recording_seconds = 120
-        service.config.vad_initial_wait_seconds = 3.0
+        service.config.vad_initial_wait_seconds = 6.0
         service.console = MagicMock()
 
         # Mock VAD model — returns a tensor-like object with .item()
@@ -199,8 +199,8 @@ class TestRecordWithVadAutomaticMocked:
         """When no speech is detected, returns empty array."""
         service = self._make_service()
         # Need enough silence chunks to trigger the initial-wait timeout
-        # (max_initial_wait_chunks = int(3 * 16000 / 512) = 93)
-        num_chunks = 94
+        # (max_initial_wait_chunks = int(6 * 16000 / 512) = 187)
+        num_chunks = 188
         chunks = [np.zeros(512, dtype=np.float32) for _ in range(num_chunks)]
         vad_probs = [0.0] * num_chunks
 
@@ -212,11 +212,11 @@ class TestRecordWithVadAutomaticMocked:
     def test_speech_then_silence_returns_audio(self):
         """Speech followed by silence returns non-empty audio."""
         service = self._make_service()
-        # 3 chunks of speech (VAD > 0.5) + 33 chunks of silence (enough to trigger stop)
+        # 3 chunks of speech (VAD > 0.5) + 65 chunks of silence (enough to trigger stop)
         speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(33)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 33
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 
@@ -227,9 +227,9 @@ class TestRecordWithVadAutomaticMocked:
         """Returned audio should be C-contiguous for Whisper compatibility."""
         service = self._make_service()
         speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(33)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 33
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 
@@ -241,9 +241,9 @@ class TestRecordWithVadAutomaticMocked:
         service = self._make_service()
         # Audio exceeding [-1, 1]
         speech_chunks = [np.ones(512, dtype=np.float32) * 5.0 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(33)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 33
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 

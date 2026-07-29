@@ -147,10 +147,21 @@ def record_with_vad_automatic(
     def create_status_display():
         """Create a status display showing VAD activity with waveform."""
         table = Table(show_header=False, box=None, padding=0)
+        chunk_seconds = CHUNK_SIZE / audio_service.config.sample_rate
 
         # Status line
         if not has_spoken:
             table.add_row("[cyan]🎤 Listening for speech...[/cyan]")
+        elif is_speaking and consecutive_silence_chunks > 0:
+            # User paused mid-speech — show waiting indicator with countdown
+            silence_secs = consecutive_silence_chunks * chunk_seconds
+            threshold_secs = silence_chunks_threshold * chunk_seconds
+            table.add_row("[yellow]🎤 Paused — still listening...[/yellow]")
+            # Visual progress bar showing silence building toward cutoff
+            bar_width = 24
+            filled = min(bar_width, int(consecutive_silence_chunks / max(1, silence_chunks_threshold) * bar_width))
+            bar = "█" * filled + "░" * (bar_width - filled)
+            table.add_row(f"    [yellow]{bar}[/yellow]  {silence_secs:.1f}s / {threshold_secs:.1f}s")
         elif is_speaking:
             table.add_row("[bold green]🎤 Recording your speech[/bold green]")
         else:
@@ -173,16 +184,26 @@ def record_with_vad_automatic(
 
         # Info
         if not has_spoken:
-            wait_time = (max_initial_wait_chunks - chunk_count) * CHUNK_SIZE / audio_service.config.sample_rate
+            wait_time = (max_initial_wait_chunks - chunk_count) * chunk_seconds
             if wait_time > 0:
-                table.add_row(f"[dim]    Timeout in {wait_time:.1f}s[/dim]")
+                table.add_row(f"[dim]    Listening for {wait_time:.1f}s more...[/dim]")
+        elif is_speaking and consecutive_silence_chunks > 0:
+            # Info already shown in the pause indicator above
+            pass
         else:
             # Show recording duration
-            duration = chunk_count * CHUNK_SIZE / audio_service.config.sample_rate
-            max_duration = max_recording_chunks * CHUNK_SIZE / audio_service.config.sample_rate
+            duration = chunk_count * chunk_seconds
+            max_duration = max_recording_chunks * chunk_seconds
             table.add_row(f"[dim]    Recording: {duration:.1f}s / {max_duration:.0f}s max[/dim]")
 
-        title = "🎤 Voice Input" if not has_spoken else ("🎤 Recording" if is_speaking else "🎤 Processing")
+        if not has_spoken:
+            title = "🎤 Voice Input"
+        elif is_speaking and consecutive_silence_chunks > 0:
+            title = "🎤 Listening (paused)"
+        elif is_speaking:
+            title = "🎤 Recording"
+        else:
+            title = "🎤 Processing"
         return Panel(table, title=title, border_style="cyan", expand=False)
 
     # Start recording immediately

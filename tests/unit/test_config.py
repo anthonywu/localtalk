@@ -102,9 +102,9 @@ class TestAudioConfig:
         assert cfg.vad_threshold == 0.5
         assert cfg.vad_min_speech_duration_ms == 250
         assert cfg.vad_speech_pad_ms == 400
-        assert cfg.vad_silence_threshold_chunks == 32
+        assert cfg.vad_silence_threshold_chunks == 64
         assert cfg.vad_max_recording_seconds == 120
-        assert cfg.vad_initial_wait_seconds == 3.0
+        assert cfg.vad_initial_wait_seconds == 6.0
 
 
 # ────────────────────────── AppConfig ──────────────────────────

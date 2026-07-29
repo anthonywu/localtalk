@@ -1,6 +1,25 @@
 """Compatibility patches for MLX library version mismatches."""
 
 
+def patch_mlx_metal_device_info():
+    """Redirect mx.metal.device_info to the non-deprecated mx.device_info.
+
+    MLX prints a deprecation warning to stderr (at the C++ level, bypassing
+    Python's warnings module) every time mx.metal.device_info() is called.
+    mlx-lm calls it during model loading and generation to set the wired
+    memory limit. Patching the alias to use mx.device_info silences the
+    noise without losing functionality.
+    """
+    try:
+        import mlx.core as mx
+
+        metal = getattr(mx, "metal", None)
+        if metal is not None and hasattr(mx, "device_info") and hasattr(metal, "device_info"):
+            metal.device_info = mx.device_info
+    except (ImportError, AttributeError):
+        pass
+
+
 def patch_mlx_lm_utils():
     """Patch mlx_lm.utils to provide save_weights as an alias for save_model.
 
@@ -18,4 +37,5 @@ def patch_mlx_lm_utils():
 
 
 # Apply patches on import
+patch_mlx_metal_device_info()
 patch_mlx_lm_utils()
