@@ -100,3 +100,83 @@ class TestPatchMlxLmUtils:
 
         assert callable(fake_utils.save_weights)
         assert fake_utils.save_weights() == "save_model"
+
+
+class TestPatchMlxMetalDeviceInfo:
+    """Tests for the mx.metal.device_info → mx.device_info(mx.gpu) redirect."""
+
+    def test_patch_redirects_to_device_info_with_gpu(self, monkeypatch):
+        """The patched function should call mx.device_info with mx.gpu."""
+        # Build a fake mlx.core module with metal submodule
+        fake_mx = types.ModuleType("mlx.core")
+
+        # Track what device_info is called with
+        calls: list = []
+        fake_gpu = "fake_gpu"
+
+        def fake_device_info(device=None):
+            calls.append(device)
+            return {"device_name": "Test GPU", "max_recommended_working_set_size": 1000}
+
+        fake_mx.device_info = fake_device_info
+        fake_mx.gpu = fake_gpu
+
+        fake_metal = types.ModuleType("mlx.metal")
+        fake_metal.device_info = lambda: None  # Original deprecated function
+        fake_mx.metal = fake_metal
+        fake_mx.core = fake_mx  # Satisfy `import mlx.core as mx`
+
+        monkeypatch.setitem(sys.modules, "mlx", fake_mx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_mx)
+
+        import localtalk.utils.mlx_compat as compat
+
+        importlib.reload(compat)
+
+        # The patched function should use mx.gpu
+        result = fake_metal.device_info()
+        assert result == {"device_name": "Test GPU", "max_recommended_working_set_size": 1000}
+        assert calls == [fake_gpu]
+
+    def test_patch_preserves_gpu_specific_behavior(self, monkeypatch):
+        """The shim must always query GPU, not the current default device."""
+        fake_mx = types.ModuleType("mlx.core")
+
+        fake_gpu = "gpu_device"
+        fake_cpu = "cpu_device"
+
+        def fake_device_info(device=None):
+            if device is fake_gpu:
+                return {"device_name": "GPU", "max_recommended_working_set_size": 1000}
+            return {"device_name": "CPU"}  # Missing the key mlx-lm needs
+
+        fake_mx.device_info = fake_device_info
+        fake_mx.gpu = fake_gpu
+        fake_mx.cpu = fake_cpu
+
+        fake_metal = types.ModuleType("mlx.metal")
+        fake_metal.device_info = lambda: None
+        fake_mx.metal = fake_metal
+        fake_mx.core = fake_mx  # Satisfy `import mlx.core as mx`
+
+        monkeypatch.setitem(sys.modules, "mlx", fake_mx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_mx)
+
+        import localtalk.utils.mlx_compat as compat
+
+        importlib.reload(compat)
+
+        # Even if someone changed the default device, the shim should return GPU info
+        result = fake_metal.device_info()
+        assert "max_recommended_working_set_size" in result
+        assert result["device_name"] == "GPU"
+
+    def test_patch_swallows_import_error(self, monkeypatch):
+        """When mlx cannot be imported, the patch should not raise."""
+        monkeypatch.setitem(sys.modules, "mlx", None)
+        monkeypatch.setitem(sys.modules, "mlx.core", None)
+
+        import localtalk.utils.mlx_compat as compat
+
+        # Should not raise
+        importlib.reload(compat)
