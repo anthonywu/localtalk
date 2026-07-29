@@ -1,9 +1,11 @@
 """Configuration models for the Local Talk App."""
 
-from enum import Enum
-from pathlib import Path
+from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from enum import Enum
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReasoningLevel(str, Enum):
@@ -17,7 +19,7 @@ class ReasoningLevel(str, Enum):
 class WhisperConfig(BaseModel):
     """Configuration for Whisper speech recognition."""
 
-    model_size: str = Field(default="base.en", description="Whisper model size")
+    model_size: str = Field(default="turbo", description="Whisper model size")
     device: str | None = Field(default=None, description="Device to use (cuda/cpu/mps)")
     language: str = Field(default="en", description="Language for transcription")
 
@@ -26,55 +28,58 @@ class MLXLMConfig(BaseModel):
     """Configuration for MLX-LM language model."""
 
     model: str = Field(default="mlx-community/gpt-oss-20b-MXFP4-Q8", description="MLX model from Hugging Face Hub")
-    temperature: float = Field(default=0.7, description="Temperature for text generation")
-    max_tokens: int = Field(default=100, description="Maximum tokens to generate")
-    top_p: float = Field(default=1.0, description="Top-p sampling parameter")
-    repetition_penalty: float = Field(default=1.0, description="Repetition penalty")
-    repetition_context_size: int = Field(default=20, description="Context size for repetition penalty")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature for text generation")
+    max_tokens: int = Field(default=100, ge=1, description="Maximum tokens to generate")
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0, description="Top-p sampling parameter")
+    repetition_penalty: float = Field(default=1.0, ge=0.1, le=10.0, description="Repetition penalty")
+    repetition_context_size: int = Field(default=20, ge=1, description="Context size for repetition penalty")
     reasoning_effort: ReasoningLevel = Field(
-        default=ReasoningLevel.LOW, description="Reasoning effort: low, medium, or high"
+        default=ReasoningLevel.LOW,
+        description="Reasoning effort: low, medium, or high",
     )
+    show_reasoning: bool = Field(default=False, description="Show analysis/commentary channels in terminal output")
+    history_max_messages: int = Field(default=20, ge=2, description="Max messages retained in chat history")
 
 
 class ChatterBoxConfig(BaseModel):
     """Configuration for ChatterBox TTS."""
 
-    device: str | None = Field(default=None, description="Device to use (cuda/cpu/mps)")
-    voice_sample_path: Path | None = Field(default=None, description="Path to voice sample for cloning")
-    exaggeration: float = Field(default=0.5, description="Emotion exaggeration (0.0-1.0)")
-    cfg_weight: float = Field(default=0.5, description="CFG weight for pacing (0.0-1.0)")
-    save_voice_samples: bool = Field(default=False, description="Save generated voice samples")
-    voice_output_dir: Path = Field(default=Path("audio-output-cache"), description="Directory to save voice samples")
-    fast_mode: bool = Field(default=True, description="Use optimized parameters for faster TTS generation")
-
-    @field_validator("exaggeration", "cfg_weight")
-    @classmethod
-    def validate_range(cls, v: float) -> float:
-        if not 0.0 <= v <= 1.0:
-            raise ValueError(f"Value must be between 0.0 and 1.0, got {v}")
-        return v
-
-    @field_validator("voice_sample_path")
-    @classmethod
-    def validate_voice_sample(cls, v: Path | None) -> Path | None:
-        if v is not None and not v.exists():
-            raise ValueError(f"Voice sample file not found: {v}")
-        return v
+    model_id: str = Field(default="mlx-community/chatterbox-turbo-4bit", description="MLX-audio TTS model ID")
+    silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
 
 
 class AudioConfig(BaseModel):
     """Configuration for audio recording and playback."""
 
-    sample_rate: int = Field(default=16000, description="Audio sample rate")
-    channels: int = Field(default=1, description="Number of audio channels")
-    chunk_size: int = Field(default=512, description="Audio chunk size")
-    silence_threshold: float = Field(default=0.01, description="Silence detection threshold")
-    silence_duration: float = Field(default=5.0, description="Duration of silence to stop recording")
+    sample_rate: int = Field(default=16000, ge=8000, le=96000, description="Audio sample rate")
+    channels: int = Field(default=1, ge=1, le=2, description="Number of audio channels")
+    chunk_size: int = Field(default=512, ge=64, description="Audio chunk size")
+    silence_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="Silence detection threshold")
+    silence_duration: float = Field(default=5.0, ge=0.1, description="Duration of silence to stop recording")
     use_vad: bool = Field(default=True, description="Use Voice Activity Detection for audio input")
     vad_auto_start: bool = Field(default=True, description="Automatically start recording when speech detected")
-    vad_threshold: float = Field(default=0.5, description="VAD probability threshold for speech detection")
-    vad_min_speech_duration_ms: int = Field(default=250, description="Minimum speech duration in milliseconds")
-    vad_speech_pad_ms: int = Field(default=400, description="Speech padding in milliseconds")
+    vad_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="VAD probability threshold for speech detection"
+    )
+    vad_min_speech_duration_ms: int = Field(default=250, ge=0, description="Minimum speech duration in milliseconds")
+    vad_speech_pad_ms: int = Field(default=400, ge=0, description="Speech padding in milliseconds")
+    vad_post_speech_silence_seconds: float = Field(
+        default=2.0, ge=0.05, description="Seconds of silence after speech before stopping recording"
+    )
+    vad_max_recording_seconds: int = Field(default=120, ge=1, description="Maximum recording duration in seconds")
+    vad_initial_wait_seconds: float = Field(default=6.0, ge=0.0, description="Initial wait before timeout if no speech")
+
+    @model_validator(mode="after")
+    def _validate_vad_constraints(self) -> AudioConfig:
+        """Ensure audio settings are compatible with Silero VAD requirements."""
+        if self.use_vad and self.vad_auto_start:
+            if self.sample_rate != 16000:
+                raise ValueError("Silero VAD requires sample_rate=16000")
+            if self.channels != 1:
+                raise ValueError("Silero VAD requires channels=1 (mono)")
+            if self.chunk_size != 512:
+                raise ValueError("Silero VAD requires chunk_size=512 at 16kHz")
+        return self
 
 
 class AppConfig(BaseModel):
@@ -89,5 +94,5 @@ class AppConfig(BaseModel):
         default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user.",
         description="System prompt for the LLM",
     )
-    tts_backend: str = Field(default="chatterbox", description="TTS backend to use: 'chatterbox' or 'none'")
+    tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")
     show_stats: bool = Field(default=False, description="Show timing statistics for STT, LLM, and TTS steps")

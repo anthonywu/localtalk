@@ -19,7 +19,6 @@ class SpeechRecognitionService:
         try:
             import whisper
 
-            self.whisper = whisper
             self.console.print(f"[cyan]Loading Whisper model: {self.config.model_size}")
             model = whisper.load_model(self.config.model_size, device=self.config.device)
 
@@ -28,8 +27,8 @@ class SpeechRecognitionService:
             dummy_audio = np.zeros(8000, dtype=np.float32)  # 0.5 seconds
             try:
                 _ = model.transcribe(dummy_audio, language="en", temperature=0, fp16=False)
-            except Exception:
-                pass  # Ignore warmup errors
+            except Exception as e:
+                self.console.print(f"[dim]Whisper warmup skipped: {e}[/dim]")
 
             return model
         except ImportError as e:
@@ -45,6 +44,7 @@ class SpeechRecognitionService:
 
         Returns:
             Transcribed text
+
         """
         import time
 
@@ -72,9 +72,9 @@ class SpeechRecognitionService:
                 self.console.print(f"[yellow]Amplified audio to max={target_max:.3f}[/yellow]")
 
         # Debug audio info
-        duration = len(audio_data) / 16000  # Assuming 16kHz
+        duration = len(audio_data) / 16000  # Whisper internally processes at 16kHz
         self.console.print(
-            f"[dim]Whisper: Processing {len(audio_data)} samples ({duration:.1f}s), max_val={max_val:.3f}[/dim]"
+            f"[dim]Whisper: Processing {len(audio_data)} samples ({duration:.1f}s), max_val={max_val:.3f}[/dim]",
         )
 
         # Force console flush before transcription
@@ -84,21 +84,16 @@ class SpeechRecognitionService:
 
         start_time = time.time()
 
-        try:
-            # Use simpler transcribe call that worked before VAD
-            # Too many parameters might cause issues
-            result = self.model.transcribe(
-                audio_data,
-                language=self.config.language,
-                fp16=False,  # Disable FP16 for compatibility
-            )
+        # Use simpler transcribe call that worked before VAD
+        # Too many parameters might cause issues
+        result = self.model.transcribe(
+            audio_data,
+            language=self.config.language,
+            fp16=False,  # Disable FP16 for compatibility
+        )
 
-            elapsed = time.time() - start_time
-            self.console.print(f"[dim]Transcription took {elapsed:.1f}s[/dim]")
-
-        except Exception as e:
-            self.console.print(f"[red]Transcription error: {e}[/red]")
-            raise
+        elapsed = time.time() - start_time
+        self.console.print(f"[dim]Transcription took {elapsed:.1f}s[/dim]")
 
         text = result["text"].strip()
 
@@ -106,5 +101,4 @@ class SpeechRecognitionService:
             self.console.print("[yellow]No speech detected in audio[/yellow]")
             return ""
 
-        self.console.print(f"[yellow]You: {text}")
         return text

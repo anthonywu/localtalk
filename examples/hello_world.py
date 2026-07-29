@@ -17,7 +17,7 @@ def main():
     # Optional: Customize settings
     # config.mlx_lm.model = "mlx-community/Llama-3.2-3B-Instruct-4bit"  # Use a different model
     # config.mlx_lm.temperature = 0.8  # More creative responses
-    # config.chatterbox.exaggeration = 0.7  # More expressive responses
+    # config.chatterbox.model_id = "mlx-community/chatterbox-turbo-4bit"  # Different TTS voice
     # config.whisper.model_size = "tiny.en"  # Faster transcription
 
     # Create assistant
