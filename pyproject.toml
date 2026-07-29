@@ -62,7 +62,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.0",
-    "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.14.10",
 ]
@@ -119,7 +118,13 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra -q --strict-markers --cov=localtalk"
+addopts = "-ra -q --strict-markers --cov=localtalk -m 'not integration and not hardware and not smoke'"
+markers = [
+    "unit: fast offline tests with no external dependencies (default)",
+    "integration: tests requiring pre-cached model weights but no hardware",
+    "hardware: tests requiring microphone/speaker hardware (manual)",
+    "smoke: end-to-end tests requiring full model stack and Apple Silicon",
+]
 
 [tool.coverage.run]
 source = ["src"]
