@@ -1,5 +1,7 @@
 """Automatic VAD recording without any user input."""
 
+import math
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -17,6 +19,10 @@ __all__ = ["level_to_block", "record_with_vad_automatic"]
 
 # Silero VAD requires exactly 512 samples per chunk at 16kHz.
 CHUNK_SIZE = 512
+
+# Display grace period before showing "paused" indicator (in chunks).
+# Prevents flicker on brief VAD jitter / consonant gaps (~300ms at 16kHz).
+PAUSE_DISPLAY_GRACE_CHUNKS = 10
 
 
 def record_with_vad_automatic(
@@ -52,15 +58,21 @@ def record_with_vad_automatic(
     last_vad_prob = 0.0
     chunk_count = 0
 
-    # Waveform history for visualization
+    # Waveform history for visualization (shared between threads)
     level_history: deque[tuple[float, bool]] = deque(maxlen=WAVEFORM_WIDTH)  # (level, is_speech)
+    history_lock = threading.Lock()
 
     # Speech detection parameters
     speech_chunks_threshold = max(
         1,
-        int(audio_service.config.vad_min_speech_duration_ms * audio_service.config.sample_rate / 1000 / CHUNK_SIZE),
+        math.ceil(
+            audio_service.config.vad_min_speech_duration_ms * audio_service.config.sample_rate / 1000 / CHUNK_SIZE
+        ),
     )
-    silence_chunks_threshold = audio_service.config.vad_silence_threshold_chunks
+    silence_chunks_threshold = max(
+        1,
+        math.ceil(audio_service.config.vad_post_speech_silence_seconds * audio_service.config.sample_rate / CHUNK_SIZE),
+    )
     max_initial_wait_chunks = int(
         audio_service.config.vad_initial_wait_seconds * audio_service.config.sample_rate / CHUNK_SIZE
     )
@@ -110,7 +122,8 @@ def record_with_vad_automatic(
 
         # Track for waveform visualization
         is_speech = vad_prob > audio_service.config.vad_threshold
-        level_history.append((last_audio_level, is_speech))
+        with history_lock:
+            level_history.append((last_audio_level, is_speech))
 
         # Speech detection logic
         if vad_prob > audio_service.config.vad_threshold:
@@ -135,40 +148,42 @@ def record_with_vad_automatic(
                 # After recording speech, we can stop
                 should_stop = True
 
-        # Check timeout if no speech yet
-        if not has_spoken and chunk_count >= max_initial_wait_chunks:
+        # Check timeout if no speech candidate yet
+        if not has_spoken and chunk_count >= max_initial_wait_chunks and consecutive_speech_chunks == 0:
             should_stop = True
 
         # Check maximum recording duration
         if chunk_count >= max_recording_chunks:
             should_stop = True
-            audio_service.console.print("[yellow]Maximum recording duration reached (2 minutes)[/yellow]")
+            max_secs = audio_service.config.vad_max_recording_seconds
+            audio_service.console.print(f"[yellow]Maximum recording duration reached ({max_secs}s)[/yellow]")
 
     def create_status_display():
         """Create a status display showing VAD activity with waveform."""
         table = Table(show_header=False, box=None, padding=0)
         chunk_seconds = CHUNK_SIZE / audio_service.config.sample_rate
 
+        # Thread-safe snapshot of waveform history
+        with history_lock:
+            levels_snapshot = tuple(level_history)
+
+        # Determine display state with grace period to avoid flicker on VAD jitter
+        is_paused = (
+            is_speaking and consecutive_silence_chunks > 0 and consecutive_silence_chunks >= PAUSE_DISPLAY_GRACE_CHUNKS
+        )
+
         # Status line
         if not has_spoken:
             table.add_row("[cyan]🎤 Listening for speech...[/cyan]")
-        elif is_speaking and consecutive_silence_chunks > 0:
-            # User paused mid-speech — show waiting indicator with countdown
-            silence_secs = consecutive_silence_chunks * chunk_seconds
-            threshold_secs = silence_chunks_threshold * chunk_seconds
-            table.add_row("[yellow]🎤 Paused — still listening...[/yellow]")
-            # Visual progress bar showing silence building toward cutoff
-            bar_width = 24
-            filled = min(bar_width, int(consecutive_silence_chunks / max(1, silence_chunks_threshold) * bar_width))
-            bar = "█" * filled + "░" * (bar_width - filled)
-            table.add_row(f"    [yellow]{bar}[/yellow]  {silence_secs:.1f}s / {threshold_secs:.1f}s")
+        elif is_paused:
+            table.add_row("[yellow]🎤 Still listening...[/yellow]")
         elif is_speaking:
             table.add_row("[bold green]🎤 Recording your speech[/bold green]")
         else:
             table.add_row("[yellow]🤫 Processing...[/yellow]")
 
         # Waveform visualization
-        waveform = render_waveform(level_history)
+        waveform = render_waveform(levels_snapshot)
         waveform_row = Text()
         waveform_row.append("    ")  # Indent
         waveform_row.append_text(waveform)
@@ -187,9 +202,16 @@ def record_with_vad_automatic(
             wait_time = (max_initial_wait_chunks - chunk_count) * chunk_seconds
             if wait_time > 0:
                 table.add_row(f"[dim]    Listening for {wait_time:.1f}s more...[/dim]")
-        elif is_speaking and consecutive_silence_chunks > 0:
-            # Info already shown in the pause indicator above
-            pass
+        elif is_paused:
+            # Show a subtle progress bar only in the latter half of the silence window
+            silence_secs = consecutive_silence_chunks * chunk_seconds
+            threshold_secs = silence_chunks_threshold * chunk_seconds
+            progress = consecutive_silence_chunks / max(1, silence_chunks_threshold)
+            if progress > 0.5:
+                bar_width = 24
+                filled = min(bar_width, int(progress * bar_width))
+                bar = "█" * filled + "░" * (bar_width - filled)
+                table.add_row(f"    [dim]{bar}[/dim]  {silence_secs:.1f}s / {threshold_secs:.1f}s")
         else:
             # Show recording duration
             duration = chunk_count * chunk_seconds
@@ -198,7 +220,7 @@ def record_with_vad_automatic(
 
         if not has_spoken:
             title = "🎤 Voice Input"
-        elif is_speaking and consecutive_silence_chunks > 0:
+        elif is_paused:
             title = "🎤 Listening (paused)"
         elif is_speaking:
             title = "🎤 Recording"
@@ -264,11 +286,16 @@ def record_with_vad_automatic(
 
     # Print a compact summary of what was captured
     if has_spoken and audio_chunks:
-        duration = chunk_count * CHUNK_SIZE / audio_service.config.sample_rate
+        with history_lock:
+            final_levels = tuple(level_history)
         summary = Table(show_header=False, box=None, padding=0)
-        summary.add_row(f"[green]✓ Captured {duration:.1f}s of speech[/green]")
+        # Compute actual speech duration from segments
+        speech_duration = sum(
+            (end - start) * CHUNK_SIZE / audio_service.config.sample_rate for start, end in speech_segments
+        )
+        summary.add_row(f"[green]✓ Recorded {speech_duration:.1f}s of speech[/green]")
         # Show final waveform snapshot
-        waveform = render_waveform(level_history)
+        waveform = render_waveform(final_levels)
         wave_row = Text()
         wave_row.append("    ")
         wave_row.append_text(waveform)

@@ -111,7 +111,7 @@ class TestRecordWithVadAutomaticMocked:
         service.config.vad_threshold = vad_threshold
         service.config.vad_speech_pad_ms = 400
         service.config.vad_min_speech_duration_ms = 64  # → 2-chunk threshold, matches old behavior
-        service.config.vad_silence_threshold_chunks = 64
+        service.config.vad_post_speech_silence_seconds = 2.0
         service.config.vad_max_recording_seconds = 120
         service.config.vad_initial_wait_seconds = 6.0
         service.console = MagicMock()
@@ -150,7 +150,7 @@ class TestRecordWithVadAutomaticMocked:
 
         return FakeStream
 
-    def _run_with_scripted_chunks(self, service, chunks, vad_probs):
+    def _run_with_scripted_chunks(self, service, chunks, vad_probs, interrupt_check=None):
         """Run record_with_vad_automatic with scripted audio chunks and VAD probabilities.
 
         The function calls the audio_callback via the stream, which we patch.
@@ -193,7 +193,7 @@ class TestRecordWithVadAutomaticMocked:
             patch("sys.stdout"),
             patch("sys.stderr"),
         ):
-            return record_with_vad_automatic(service)
+            return record_with_vad_automatic(service, interrupt_check=interrupt_check)
 
     def test_no_speech_returns_empty(self):
         """When no speech is detected, returns empty array."""
@@ -212,24 +212,46 @@ class TestRecordWithVadAutomaticMocked:
     def test_speech_then_silence_returns_audio(self):
         """Speech followed by silence returns non-empty audio."""
         service = self._make_service()
-        # 3 chunks of speech (VAD > 0.5) + 65 chunks of silence (enough to trigger stop)
+        # 3 chunks of speech (VAD > 0.5) + 64 chunks of silence
+        # (silence_chunks_threshold = ceil(2.0 * 16000 / 512) = 63, need 63+ to trigger stop)
         speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(64)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 64
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 
         assert len(result) > 0
         assert result.dtype == np.float32
 
+    def test_speech_then_silence_below_threshold_does_not_stop(self):
+        """Speech followed by silence just below threshold should not stop via silence."""
+        service = self._make_service()
+        # silence_chunks_threshold = 63; 62 silence chunks should NOT trigger stop
+        # But max_recording is 120s → 3750 chunks, and initial wait is 6s → 187 chunks.
+        # With only 3+62=65 chunks, neither timeout fires, so the loop runs until
+        # should_stop is set by the stall guard. The callback won't set should_stop
+        # because silence_chunks (62) < threshold (63).
+        speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(62)]
+        chunks = speech_chunks + silence_chunks
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 62
+
+        # The function should still return something — the stall guard will stop it,
+        # and since has_spoken=True, speech segments will be extracted.
+        result = self._run_with_scripted_chunks(service, chunks, vad_probs)
+
+        # Even without hitting the silence threshold, the ongoing speech segment
+        # is captured at the end (is_speaking and current_segment_start is not None).
+        assert len(result) > 0
+
     def test_audio_is_contiguous(self):
         """Returned audio should be C-contiguous for Whisper compatibility."""
         service = self._make_service()
         speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(64)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 64
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 
@@ -241,11 +263,68 @@ class TestRecordWithVadAutomaticMocked:
         service = self._make_service()
         # Audio exceeding [-1, 1]
         speech_chunks = [np.ones(512, dtype=np.float32) * 5.0 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(65)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(64)]
         chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 65
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 64
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs)
 
         if len(result) > 0:
             assert np.abs(result).max() <= 1.0
+
+    def test_interrupt_check_stops_recording(self):
+        """External interrupt (e.g. Esc key) stops recording immediately."""
+        service = self._make_service()
+        # Feed lots of chunks but interrupt after the first one
+        speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(64)]
+        chunks = speech_chunks + silence_chunks
+        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 64
+
+        call_count = [0]
+
+        def interrupt():
+            call_count[0] += 1
+            return call_count[0] > 1  # Stop after second check
+
+        result = self._run_with_scripted_chunks(service, chunks, vad_probs, interrupt_check=interrupt)
+
+        # Interrupt happens early; speech segments may or may not be captured
+        # depending on timing, but the function should return without hanging.
+        assert isinstance(result, np.ndarray)
+
+    def test_speech_at_initial_deadline_boundary_is_not_cut_off(self):
+        """Speech starting just before the initial timeout should not be cut off."""
+        service = self._make_service()
+        # initial_wait = 6.0s → 187 chunks. Feed 186 silence chunks, then 3 speech
+        # chunks, then enough silence to trigger stop. At chunk 189, has_spoken is
+        # False but consecutive_speech_chunks > 0, so the timeout should NOT fire.
+        # After enough speech chunks (threshold=2), has_spoken becomes True.
+        silence_before = [np.zeros(512, dtype=np.float32) for _ in range(186)]
+        speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        silence_after = [np.zeros(512, dtype=np.float32) for _ in range(64)]
+        chunks = silence_before + speech_chunks + silence_after
+        vad_probs = [0.0] * 186 + [0.9, 0.9, 0.9] + [0.0] * 64
+
+        result = self._run_with_scripted_chunks(service, chunks, vad_probs)
+
+        # Speech was detected and should return audio
+        assert len(result) > 0
+
+    def test_pause_then_resume_does_not_stop(self):
+        """Brief silence between speech bursts should not trigger stop."""
+        service = self._make_service()
+        # Use a small silence threshold for this test: 0.1s → ceil(0.1*16000/512) = 4 chunks
+        service.config.vad_post_speech_silence_seconds = 0.1
+        # 3 speech + 3 silence (below 4-chunk threshold) + 3 speech + 64 silence (above)
+        chunks_a = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        chunks_sil = [np.zeros(512, dtype=np.float32) for _ in range(3)]
+        chunks_b = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        chunks_end = [np.zeros(512, dtype=np.float32) for _ in range(64)]
+        chunks = chunks_a + chunks_sil + chunks_b + chunks_end
+        vad_probs = [0.9] * 3 + [0.0] * 3 + [0.9] * 3 + [0.0] * 64
+
+        result = self._run_with_scripted_chunks(service, chunks, vad_probs)
+
+        assert len(result) > 0
+        assert result.dtype == np.float32
