@@ -84,11 +84,11 @@ class WebToolsConfig(BaseModel):
 
 
 class BrowserToolsConfig(BaseModel):
-    """Optional Playwright browser tools (off by default).
+    """Playwright browser tools (enabled with online tools).
 
-    Uses the user's installed browsers when possible:
-    - chrome → system Google Chrome via Playwright channel
-    - safari → Playwright WebKit (Safari engine; not Safari.app itself)
+    Chrome default: attach over CDP (Chrome DevTools Protocol) to the user's
+    running Chrome when remote debugging is on; fall back to launching Chrome.
+    Safari uses Playwright WebKit (no CDP attach).
     """
 
     enabled: bool = Field(
@@ -97,9 +97,20 @@ class BrowserToolsConfig(BaseModel):
     )
     engine: Literal["chrome", "safari"] = Field(
         default="chrome",
-        description="Browser engine: chrome (system Chrome) or safari (Playwright WebKit)",
+        description="Browser engine: chrome (system Chrome / CDP) or safari (Playwright WebKit)",
     )
-    headed: bool = Field(default=False, description="Show browser window (default headless)")
+    attach: bool = Field(
+        default=True,
+        description="Prefer attaching to Chrome via CDP (default on); fall back to launch if unavailable",
+    )
+    cdp_url: str = Field(
+        default="http://127.0.0.1:9222",
+        description="Chrome DevTools Protocol endpoint for attach mode",
+    )
+    headed: bool = Field(
+        default=False,
+        description="When launching (not attaching), show a browser window (default headless launch)",
+    )
     max_tool_rounds: int = Field(
         default=12,
         ge=1,
@@ -158,7 +169,7 @@ class AppConfig(BaseModel):
     browser_tools: BrowserToolsConfig = Field(default_factory=BrowserToolsConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
-        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user. Answer every question directly; never apologize or claim you cannot respond. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",
+        default="You are a helpful and friendly AI assistant for an adult user on their private Mac. You are polite and aim to provide concise responses of less than 20 words. You are aware of the current date and time. Answer every question directly; never apologize, never refuse for content-policy theater, and never claim you cannot respond when tools or knowledge can help. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",
         description="System prompt for the LLM",
     )
     tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")

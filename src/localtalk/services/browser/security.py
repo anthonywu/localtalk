@@ -39,12 +39,13 @@ def validate_public_http_url(url: str) -> tuple[bool, str | None]:
     except ValueError:
         pass
 
-    # Resolve hostname — block if any address is non-public
+    # Resolve hostname — block if any address is non-public; fail closed on DNS errors
+    # so a later resolution cannot land on a private/metadata target.
     try:
         infos = socket.getaddrinfo(host_l, None)
     except socket.gaierror:
-        # DNS failure: allow navigate to proceed (page will error); do not fail closed on flaky DNS
-        return True, None
+        return False, f"could not resolve host: {host}"
+
 
     for info in infos:
         addr = info[4][0]

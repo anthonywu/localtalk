@@ -208,6 +208,9 @@ localtalk
 - Mid-session: say "enable web" / "disable web", and other startup knobs via tools
   (`set_web_tools`, `set_reasoning_level`, `set_tts`, `set_stats`, `set_vad_mode`,
   `set_show_reasoning`, `set_browser_engine`, `set_browser_headed`, `set_generation`)
+- Browser: **attach to your Chrome via CDP by default** (real session/cookies); falls back
+  to launching Chrome. Enable remote debugging in Chrome (`chrome://inspect`).
+  `--no-browser-attach` forces a separate launch; `--browser-cdp-url` sets the endpoint
 
 **TTS & Output Options:**
 

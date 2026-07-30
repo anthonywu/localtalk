@@ -751,6 +751,56 @@ class TestReasoningToolCalls:
         assert "web_search" in service.tool_registry.names()
         assert "Online tools set to: on" in capsys.readouterr().out
 
+    def test_pending_tool_on_last_round_still_runs(self, monkeypatch):
+        """A tool call queued when the round budget is exhausted is still dispatched once."""
+        from openai_harmony import ReasoningEffort
+
+        service = self._make_service()
+        service.web_tools.max_tool_rounds = 1
+        stops = [MagicMock(token=i, finish_reason="stop") for i in range(6)]
+        service.stream_generate = MagicMock(side_effect=[iter([s]) for s in stops])
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"level": "medium"})],
+                [self._tool_call_msg({"level": "high"})],
+                [self._final_msg("Now at high.")],
+            ],
+        )
+
+        result = service.generate_response("think then think harder")
+
+        assert result == "Now at high."
+        assert service.reasoning_effort == ReasoningEffort.HIGH
+
+    def test_set_web_tools_raises_round_budget_mid_turn(self, monkeypatch):
+        """Enabling web mid-turn expands max_tool_rounds so later tools still run."""
+        from openai_harmony import ReasoningEffort
+
+        service = self._make_service(web_enabled=False)
+        assert service._max_tool_rounds() == 3
+        stops = [MagicMock(token=i, finish_reason="stop") for i in range(20)]
+        service.stream_generate = MagicMock(side_effect=[iter([s]) for s in stops])
+        # 5 tool calls exceeds offline budget (3) + one overflow; needs live browser budget.
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"enabled": True}, tool_name="set_web_tools")],
+                [self._tool_call_msg({"level": "medium"})],
+                [self._tool_call_msg({"level": "high"})],
+                [self._tool_call_msg({"level": "low"})],
+                [self._tool_call_msg({"level": "medium"})],
+                [self._final_msg("All done.")],
+            ],
+        )
+
+        result = service.generate_response("enable web and tune reasoning")
+
+        assert result == "All done."
+        assert service.web_tools.enabled is True
+        assert service.reasoning_effort == ReasoningEffort.MEDIUM
+        assert service._max_tool_rounds() == 12
+
     def test_no_tool_call_leaves_effort_unchanged(self, monkeypatch):
         from openai_harmony import ReasoningEffort
 

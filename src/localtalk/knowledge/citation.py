@@ -30,11 +30,22 @@ def offline_citation(pack_id: str | None, article_title: str | None = None) -> d
     }
 
 
+_WEB_BACKEND_LABELS = {
+    "wikipedia": "English Wikipedia online",
+    "google": "Google Search",
+    "duckduckgo": "DuckDuckGo",
+    "wttr.in": "wttr.in weather",
+    "product_page": "the product page",
+}
+
+
 def web_citation(backend: str = "wikipedia", article_title: str | None = None) -> dict[str, Any]:
     """Build a citation payload for an online web_search hit."""
-    label = "English Wikipedia online" if backend == "wikipedia" else f"{backend} online"
-    if article_title:
+    label = _WEB_BACKEND_LABELS.get(backend, f"{backend} online")
+    if article_title and backend == "wikipedia":
         spoken_prefix = f"According to {label}, in the article on {article_title}"
+    elif article_title and backend in {"google", "duckduckgo"}:
+        spoken_prefix = f"According to {label}"
     else:
         spoken_prefix = f"According to {label}"
     return {

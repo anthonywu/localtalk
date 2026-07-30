@@ -7,6 +7,7 @@
 - Online tools default to **auto**: enabled when startup detects internet reachability, off when offline (override with `--enable-web` / `--no-web`)
 - Mid-session `set_web_tools` Harmony tool lets the user say "enable web" / "disable web" without restarting
 - Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (model/whisper still require restart)
+- Browser control defaults to **CDP attach** to the user's running Chrome (`http://127.0.0.1:9222`); falls back to launching Chrome if CDP is down. Use `--no-browser-attach` to force launch-only. Disconnect never quits the user's Chrome.
 
 ## [0.6.0] - 2026-07-30
 

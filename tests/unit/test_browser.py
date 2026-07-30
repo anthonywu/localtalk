@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import socket
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from localtalk.models.config import BrowserToolsConfig
 from localtalk.services.browser.security import validate_public_http_url
-from localtalk.services.browser.session import BrowserSession
+from localtalk.services.browser.session import BrowserSession, browser_engine_status, probe_cdp
 from localtalk.services.tools.browser import (
     CLICK,
     CLOSE,
@@ -53,6 +54,15 @@ class TestValidatePublicHttpUrl:
     def test_rejects_private_ip(self):
         ok, err = validate_public_http_url("http://192.168.1.1/")
         assert ok is False
+
+    def test_dns_failure_fails_closed(self, monkeypatch):
+        def _raise_gaierror(*_a, **_k):
+            raise socket.gaierror(8, "nodename nor servname provided")
+
+        monkeypatch.setattr("localtalk.services.browser.security.socket.getaddrinfo", _raise_gaierror)
+        ok, err = validate_public_http_url("https://unresolvable.invalid/")
+        assert ok is False
+        assert "resolve" in (err or "").lower()
 
     def test_empty(self):
         ok, err = validate_public_http_url("")
@@ -103,9 +113,72 @@ class TestBrowserToolsConfig:
         cfg = BrowserToolsConfig()
         assert cfg.enabled is False
         assert cfg.engine == "chrome"
+        assert cfg.attach is True  # CDP attach is default
+        assert cfg.cdp_url == "http://127.0.0.1:9222"
         assert cfg.headed is False
         assert cfg.max_tool_rounds == 12
 
     def test_safari_engine(self):
         cfg = BrowserToolsConfig(engine="safari", enabled=True)
         assert cfg.engine == "safari"
+
+
+class TestCdpProbe:
+    def test_probe_cdp_success(self):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"Browser": "Chrome/140", "webSocketDebuggerUrl": "ws://x"}
+        client = MagicMock()
+        client.get.return_value = response
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        with patch("httpx.Client", return_value=client):
+            result = probe_cdp("http://127.0.0.1:9222")
+        assert result["ok"] is True
+        assert "Chrome" in result["detail"]
+
+    def test_probe_cdp_failure(self):
+        client = MagicMock()
+        client.get.side_effect = OSError("connection refused")
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        with patch("httpx.Client", return_value=client):
+            result = probe_cdp("http://127.0.0.1:9222")
+        assert result["ok"] is False
+
+
+class TestBrowserSessionAttachClose:
+    def test_close_attached_does_not_call_browser_close(self):
+        session = BrowserSession(BrowserToolsConfig(attach=True))
+        session._attached = True
+        session._owns_page = True
+        page = MagicMock()
+        browser = MagicMock()
+        playwright = MagicMock()
+        session._page = page
+        session._context = MagicMock()
+        session._browser = browser
+        session._playwright = playwright
+        session.close()
+        page.close.assert_called_once()
+        browser.close.assert_not_called()
+        playwright.stop.assert_called_once()
+        assert session._attached is False
+        assert session._page is None
+
+    def test_browser_engine_status_prefers_cdp(self):
+        import sys
+        import types
+
+        # Simulate playwright present without requiring the optional package
+        fake_pw = types.ModuleType("playwright")
+        with (
+            patch(
+                "localtalk.services.browser.session.probe_cdp",
+                return_value={"ok": True, "detail": "CDP ready"},
+            ),
+            patch.dict(sys.modules, {"playwright": fake_pw}),
+        ):
+            status = browser_engine_status("chrome", attach=True, cdp_url="http://127.0.0.1:9222")
+        assert status["ok"] is True
+        assert status["mode"] == "attach"

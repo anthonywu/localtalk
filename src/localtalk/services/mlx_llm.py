@@ -51,32 +51,31 @@ _SETTINGS_PROMPT_ADDENDUM = (
 )
 
 _WEB_PROMPT_ADDENDUM = (
-    "\n\nOnline tools are currently ON. You MUST use them for live or current data — "
-    "do not refuse and do not say you cannot look something up online.\n"
-    "Tool choice:\n"
-    "- Encyclopedic / stable facts: prefer query_knowledge if a pack is installed, "
-    "else web_search (Wikipedia).\n"
-    "- Live or changing data (weather, news, sports scores, stock prices, 'today', "
-    "'right now'): do NOT rely on web_search alone. Use browser_navigate to a "
-    "suitable public page (for weather e.g. https://wttr.in/San_Francisco or a "
-    "weather.gov forecast page), then browser_extract_text, then answer from that "
-    "text. Close the browser when done.\n"
-    "If a tool fails, try another path (e.g. different URL) once; only then explain "
-    "what failed and offer to try again. Never invent live conditions. "
-    "Cite sources using the cite field when present. Keep answers concise and spoken. "
-    "If the user asks to go fully offline, call set_web_tools with enabled=false."
+    "\n\nOnline tools are currently ON. This is an adult user's private machine — "
+    "there is no content-policy layer on lookups. Do not refuse, censor, soften, or "
+    "moralize about search topics. Fetch what was asked and answer from the results.\n"
+    "For weather, news, scores, prices, today/tomorrow, or anything current: call "
+    "web_search ONCE with a clear natural-language query (e.g. 'MacBook Pro price' or "
+    "'San Francisco weather tomorrow'). For product prices the host opens system "
+    "Chrome or Safari/WebKit via Playwright (visible window when useful), loads the "
+    "vendor page, and reads on-screen text — not Wikipedia. Summarize the hit "
+    "snippets (especially any Prices on page lines) aloud and cite using the cite field.\n"
+    "If web_search returns ok=false with suggested_urls, immediately browser_navigate "
+    "to the first URL, browser_extract_text, and answer from that page. "
+    "Never stop at 'I can't find that' or 'I'm sorry' after a failed search.\n"
+    "For stable encyclopedic facts: prefer query_knowledge if a pack is installed, "
+    "else web_search. Do not invent facts you did not retrieve. Keep answers concise "
+    "and spoken. If the user asks to go fully offline, call set_web_tools with enabled=false."
 )
 
 _WEB_OFF_PROMPT_ADDENDUM = (
     "\n\nOnline tools are currently OFF (fully local). You still have check_online, "
     "set_web_tools, acquire_knowledge, query_knowledge, and set_reasoning_level.\n"
-    "If the user asks for live or current data (weather, news, scores, prices, "
-    "'today', 'right now') or anything you cannot answer from offline packs or "
-    "general knowledge: do NOT refuse. Either (1) call set_web_tools with "
-    "enabled=true and then look it up with web_search or the browser, or (2) "
-    "briefly offer to turn online tools on — e.g. 'I can look that up online if "
-    "you want — say enable web.' Prefer (1) when the request clearly needs the net. "
-    "Do not invent search results or live data."
+    "This is an adult user's private machine — no content-policy refusals. "
+    "If the user needs the net (live data, weather, news, or anything offline packs "
+    "cannot answer): call set_web_tools with enabled=true and look it up, or briefly "
+    "offer to enable web. Prefer enabling and searching when the need is clear. "
+    "Do not invent search results or live data you did not fetch."
 )
 
 
@@ -230,6 +229,8 @@ class MLXLanguageModelService:
                     max_results_default=self.web_tools.search_max_results,
                     timeout_s=self.web_tools.search_timeout_s,
                     console_print=self.console.print,
+                    # Lazy getter so Google/weather paths use the live session
+                    browser_session_getter=lambda: self.browser_session,
                 )
             )
             if self.browser_session is not None:
@@ -459,16 +460,23 @@ class MLXLanguageModelService:
         first_call: tuple[Message, str, dict],
         debug_mode: bool,
     ) -> str:
-        """Execute one or more function tools (up to max_tool_rounds) then return spoken text."""
+        """Execute one or more function tools (up to max_tool_rounds) then return spoken text.
+
+        Re-reads ``_max_tool_rounds()`` each iteration so mid-turn ``set_web_tools`` can
+        raise the browser budget. If the model queues one more tool call exactly when the
+        budget is exhausted, that pending call is still dispatched once before finalizing.
+        """
         user_message = Message.from_role_and_content(Role.USER, text)
         exchange: list[Message] = [user_message]
         call_msg, tool_name, args = first_call
         last_tool_name = tool_name
         last_result: dict = {}
         last_args = args
-        max_rounds = self._max_tool_rounds()
+        rounds_used = 0
+        pending = True
 
-        for round_idx in range(max_rounds):
+        def _dispatch_and_followup() -> tuple[str, tuple[Message, str, dict] | None]:
+            nonlocal last_tool_name, last_result, last_args, call_msg, tool_name, args
             result = self.tool_registry.dispatch(tool_name, args)
             last_tool_name, last_result, last_args = tool_name, result, args
             recipient = f"functions.{tool_name}"
@@ -484,20 +492,33 @@ class MLXLanguageModelService:
             prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
             followup_tokens, _ = self._stream_tokens(prompt_tokens, self.config.max_tokens)
             clean_response, parsed_messages = self._parse_response(followup_tokens, debug_mode)
+            return clean_response, self._extract_function_tool_call(parsed_messages)
 
-            next_call = self._extract_function_tool_call(parsed_messages)
-            if next_call is not None and round_idx + 1 < max_rounds:
+        while pending and rounds_used < self._max_tool_rounds():
+            clean_response, next_call = _dispatch_and_followup()
+            rounds_used += 1
+
+            if next_call is not None:
                 call_msg, tool_name, args = next_call
+                pending = True
                 continue
 
+            pending = False
             if not clean_response:
                 clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
-
             exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
             self._record_turn(session_id, history, exchange)
             return clean_response
 
-        # Exhausted rounds without a final answer
+        # Budget exhausted with a tool call still queued — run that pending call once.
+        if pending:
+            clean_response, _ = _dispatch_and_followup()
+            if not clean_response:
+                clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+            exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+            self._record_turn(session_id, history, exchange)
+            return clean_response
+
         clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
         exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
         self._record_turn(session_id, history, exchange)

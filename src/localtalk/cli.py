@@ -155,14 +155,35 @@ def parse_args():
         choices=["chrome", "safari"],
         default="chrome",
         help=(
-            "Browser engine when online tools are on: chrome (system Google Chrome) or "
+            "Browser engine when online tools are on: chrome (system Google Chrome / CDP) or "
             "safari (Playwright WebKit). Default: chrome"
         ),
+    )
+    attach_group = parser.add_mutually_exclusive_group()
+    attach_group.add_argument(
+        "--browser-attach",
+        action="store_true",
+        default=None,
+        help=(
+            "Attach to a running Chrome via CDP (default). Uses your real Chrome session "
+            "(tabs/cookies). Enable remote debugging in Chrome (chrome://inspect)."
+        ),
+    )
+    attach_group.add_argument(
+        "--no-browser-attach",
+        action="store_true",
+        help="Do not attach via CDP; always launch a separate Chrome/WebKit instance",
+    )
+    parser.add_argument(
+        "--browser-cdp-url",
+        type=str,
+        default="http://127.0.0.1:9222",
+        help="Chrome DevTools Protocol URL for attach mode (default: http://127.0.0.1:9222)",
     )
     parser.add_argument(
         "--browser-headed",
         action="store_true",
-        help="When online tools are on, show the browser window (default is headless)",
+        help="When launching (not attaching), show a browser window (launch default is headless)",
     )
 
     return parser.parse_args()
@@ -268,16 +289,28 @@ def main():
 
     # Online tools policy: auto (default) | on | off
     # Effective enabled is set after the startup network probe in VoiceAssistant.
+    # CLI flags win over LOCALTALK_ENABLE_WEB so --no-web always stays fully local.
     env_web = os.environ.get("LOCALTALK_ENABLE_WEB")
-    if args.enable_web or env_web == "1":
+    if args.enable_web:
         config.web_tools.policy = "on"
-    elif args.no_web or env_web == "0":
+    elif args.no_web:
+        config.web_tools.policy = "off"
+    elif env_web == "1":
+        config.web_tools.policy = "on"
+    elif env_web == "0":
         config.web_tools.policy = "off"
     else:
         config.web_tools.policy = "auto"
     if args.skip_network_probe:
         config.web_tools.startup_probe = False
     config.browser_tools.engine = args.browser_engine
+    config.browser_tools.cdp_url = args.browser_cdp_url
+    # Attach is default True; --no-browser-attach forces launch-only
+    if args.no_browser_attach:
+        config.browser_tools.attach = False
+    elif args.browser_attach:
+        config.browser_tools.attach = True
+    # else keep model default (attach=True)
     if args.browser_headed:
         config.browser_tools.headed = True
 

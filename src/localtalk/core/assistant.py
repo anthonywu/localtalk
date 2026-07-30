@@ -379,22 +379,33 @@ class VoiceAssistant:
                 '(say "think harder" or "think faster" to change it anytime)'
             )
 
-            # Browser engine check when online tools are on
+            # Browser check when online tools are on (CDP attach preferred for Chrome)
             if self.config.web_tools.enabled:
                 from localtalk.services.browser.session import browser_engine_status
 
-                init_messages.append("🧭 Checking browser engine...")
+                init_messages.append("🧭 Checking browser (CDP attach preferred)...")
                 live.update(create_panel())
-                status = browser_engine_status(self.config.browser_tools.engine)
+                bt = self.config.browser_tools
+                status = browser_engine_status(
+                    bt.engine,
+                    attach=bt.attach,
+                    cdp_url=bt.cdp_url,
+                )
                 if status.get("ok"):
-                    headed = "headed" if self.config.browser_tools.headed else "headless"
-                    init_messages[-1] = (
-                        f"🧭 Browser: ready ({self.config.browser_tools.engine}, {headed}) — {status.get('detail', '')}"
-                    )
+                    mode = status.get("mode") or ("attach" if bt.attach else "launch")
+                    init_messages[-1] = f"🧭 Browser: ready ({bt.engine}, {mode}) — {status.get('detail', '')}"
+                    if mode == "attach":
+                        init_messages.append(
+                            f"   CDP {bt.cdp_url} — opens a new tab in your Chrome "
+                            "(cookies/logins available); disconnect leaves Chrome running"
+                        )
+                    elif mode == "launch-fallback":
+                        init_messages.append(
+                            "   Tip: enable Chrome remote debugging for attach "
+                            "(chrome://inspect → Allow remote debugging)"
+                        )
                 else:
-                    init_messages[-1] = (
-                        f"🧭 Browser: unavailable ({self.config.browser_tools.engine}) — {status.get('error')}"
-                    )
+                    init_messages[-1] = f"🧭 Browser: unavailable ({bt.engine}) — {status.get('error')}"
 
             # Wire mid-session tools that touch assistant-owned services (TTS, VAD, stats)
             self.llm.bind_session_control(
