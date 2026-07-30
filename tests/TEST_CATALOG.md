@@ -1,6 +1,6 @@
 # Test Catalog — LocalTalk Unit Test Suite
 
-> **192 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
+> **197 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
 >
 > Counts include parametrized cases. Coverage values below come from `uv run pytest --cov-report=term-missing`.
 
@@ -14,7 +14,7 @@
 - [Waveform and automatic VAD — 23 tests](#waveform-and-automatic-vad--23-tests)
 - [Whisper speech recognition — 11 tests](#whisper-speech-recognition--11-tests)
 - [MLX text-to-speech — 9 tests](#mlx-text-to-speech--9-tests)
-- [MLX language model — 34 tests](#mlx-language-model--34-tests)
+- [MLX language model — 39 tests](#mlx-language-model--39-tests)
 - [Voice assistant orchestration — 36 tests](#voice-assistant-orchestration--36-tests)
 - [Summary](#summary)
 
@@ -202,7 +202,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_silence_duration_correct` | Silence length matches the configured default at sample rate. | Timing must scale correctly with sample rate. |
 | `test_long_form_mlx_array_conversion` | Converts MLX-like arrays in the long-form path. | Keeps both synthesis paths playback-ready. |
 
-## MLX language model — 34 tests
+## MLX language model — 39 tests
 
 **File:** `tests/unit/test_mlx_llm.py`
 
@@ -244,6 +244,11 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_retry_on_truncation_recovers` | A length-truncated generation retries once with a larger budget; the recovered turn is persisted. | gpt-oss reasoning can exhaust small budgets before the final answer; retry recovers it. |
 | `test_no_retry_when_finish_reason_stop` | No retry after a natural stop. | Avoids doubling latency/cost on genuine parse failures. |
 | `test_retry_exhausted_still_falls_back` | An exhausted retry falls back without saving history. | Guarantees bounded attempts and a clean history. |
+| `test_tool_call_updates_reasoning_effort` | A `set_reasoning_level` call updates the effort, re-renders the follow-up with it, and records the full exchange. | Mid-session reasoning control must actually take effect and stay coherent. |
+| `test_tool_call_invalid_level_rejected` | An invalid level leaves the effort unchanged and reports an error to the model. | Bad tool arguments must not corrupt service state. |
+| `test_tool_call_without_confirmation_uses_spoken_fallback` | A silent follow-up produces a spoken confirmation anyway. | Voice users always need audible feedback for a level change. |
+| `test_system_and_developer_rendered_every_turn` | System (effort) and developer (tools) messages precede history on every turn. | Mid-session effort changes and consistent persona both depend on this. |
+| `test_no_tool_call_leaves_effort_unchanged` | A normal turn generates once and keeps the configured effort. | Tool registration must not alter the normal path. |
 
 The generation test stubs use `_make_sampler` and `_make_logits_processors`, matching the current `mlx_lm` generation API.
 
@@ -299,6 +304,6 @@ The generation test stubs use `_make_sampler` and `_make_logits_processors`, mat
 | `tests/unit/test_audio_vad_auto.py` | 23 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
 | `tests/unit/test_speech_recognition.py` | 11 | `services/speech_recognition.py` | 67% |
 | `tests/unit/test_mlx_tts.py` | 9 | `services/mlx_tts.py` | 69% |
-| `tests/unit/test_mlx_llm.py` | 34 | `services/mlx_llm.py` | 76% |
+| `tests/unit/test_mlx_llm.py` | 39 | `services/mlx_llm.py` | 76% |
 | `tests/unit/test_assistant.py` | 36 | `core/assistant.py` | 46% |
-| **Total** | **192** | | **64% overall** |
+| **Total** | **197** | | **64% overall** |

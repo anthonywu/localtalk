@@ -41,6 +41,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
 - 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD
 - 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
+- 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via tool call
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 💬 **Dual Input Modes**: Type or speak your queries
 - 💾 **Fully Offline**: No internet connection required after setup
@@ -254,6 +255,16 @@ assistant.run()
 ```bash
 localtalk --system-prompt "You are a pirate. Respond in pirate speak, matey!"
 ```
+
+### Changing Reasoning Level Mid-Session
+
+You can adjust how deeply the assistant thinks without restarting — just ask:
+
+- *"Think harder about this one"* → reasoning level set to `high`
+- *"Quick answers for a bit"* / *"Stop overthinking"* → reasoning level set to `low`
+- *"Go back to normal reasoning"* → reasoning level set to `medium`
+
+The assistant confirms the change out loud, and the new level applies to all following turns. You can also set the starting level with `--reasoning {low,medium,high}`.
 
 ## Troubleshooting
 

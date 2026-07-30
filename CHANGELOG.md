@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Mid-session reasoning control via Harmony tool calling: the assistant exposes a `set_reasoning_level` tool, so asking it to "think harder" or "think faster" updates the reasoning effort for all following turns, confirmed with a spoken response
+- System and developer messages are now rendered on every turn instead of only the first: the system message carries the reasoning effort (required for mid-session changes), and this also keeps the persona instructions in context after turn 1
+- Harmony stop tokens (`<|call|>`, `<|return|>`) are registered with the tokenizer so generation halts cleanly after tool calls
+
 ### Changed
 
 - Raise default `max_tokens` from 100 to 512: gpt-oss reasons in the Harmony analysis channel before answering, and 100 tokens frequently truncated generation before any final answer existed, surfacing the "I'm sorry, I couldn't produce a response" fallback
