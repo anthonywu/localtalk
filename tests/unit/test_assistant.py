@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -126,6 +127,31 @@ class TestEnhanceSystemPrompt:
         original = config.system_prompt
         assistant._enhance_system_prompt()
         assert assistant.config.system_prompt == original
+
+
+# ────────────────────────── _init_services ──────────────────────────
+
+
+class TestInitServices:
+    def test_runtime_services_use_interactive_console(self, monkeypatch, fake_sounddevice):
+        """LLM/audio services load quietly into the init panel, but their runtime
+        output (response text read-ahead, retry warnings, reasoning updates,
+        recording status) must render to the interactive console."""
+        assistant = _make_assistant_stub()
+        llm_instance = MagicMock()
+        audio_instance = MagicMock()
+        monkeypatch.setattr("localtalk.core.assistant.SpeechRecognitionService", MagicMock())
+        monkeypatch.setattr(
+            "localtalk.core.assistant.MLXLanguageModelService",
+            MagicMock(return_value=llm_instance),
+        )
+        monkeypatch.setattr("localtalk.services.mlx_tts.MLXTextToSpeechService", MagicMock())
+        monkeypatch.setattr("localtalk.core.assistant.AudioService", MagicMock(return_value=audio_instance))
+
+        assistant._init_services()
+
+        assert llm_instance.console is assistant.console
+        assert audio_instance.console is assistant.console
 
 
 # ────────────────────────── _process_text_response ──────────────────────────
@@ -266,6 +292,42 @@ class TestProcessVoiceResponse:
 
 
 # ────────────────────────── process_voice_input ──────────────────────────
+
+
+class TestRunShutdown:
+    """run() must install SIG_IGN for SIGINT after the loop ends so a second
+    Ctrl+C during interpreter shutdown doesn't surface an ugly
+    ``threading._shutdown`` traceback."""
+
+    def test_sigint_ignored_after_normal_exit(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(return_value=False)
+
+        with patch("localtalk.core.assistant.signal.signal") as mock_signal:
+            assistant.run()
+
+        mock_signal.assert_called_with(signal.SIGINT, signal.SIG_IGN)
+
+    def test_sigint_ignored_after_keyboard_interrupt(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(side_effect=KeyboardInterrupt())
+
+        with patch("localtalk.core.assistant.signal.signal") as mock_signal:
+            assistant.run()
+
+        mock_signal.assert_called_with(signal.SIGINT, signal.SIG_IGN)
+
+    def test_goodbye_message_still_printed(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(return_value=False)
+        assistant.console = MagicMock()
+
+        with patch("localtalk.core.assistant.signal.signal"):
+            assistant.run()
+
+        printed = [str(call.args[0]) for call in assistant.console.print.call_args_list]
+        assert any("Exiting" in p for p in printed)
+        assert any("Thank you for using Local Voice Assistant" in p for p in printed)
 
 
 class TestProcessVoiceInput:

@@ -1,6 +1,7 @@
 """Main voice assistant implementation."""
 
 import select
+import signal
 import sys
 import termios
 import threading
@@ -266,6 +267,11 @@ class VoiceAssistant:
             init_messages.append(f"🤖 Loading LLM: {self.config.mlx_lm.model}")
             live.update(create_panel())
             self.llm = MLXLanguageModelService(self.config.mlx_lm, self.config.system_prompt, quiet_console)
+            # Model loading stays inside the init panel, but runtime output —
+            # the response text (printed before TTS so users can read ahead),
+            # generation spinner, retry warnings, and reasoning-level updates —
+            # must render to the interactive console.
+            self.llm.console = self.console
             live.update(create_panel())
 
             # Text-to-speech setup based on backend
@@ -584,6 +590,11 @@ class VoiceAssistant:
                 pass
         except KeyboardInterrupt:
             pass
+
+        # Ignore further Ctrl+C during shutdown so a second press (or a
+        # held key) doesn't surface an ugly ``threading._shutdown``
+        # traceback while the interpreter joins background threads.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         self.console.print("\n[red]Exiting...")
         self.console.print("[blue]Thank you for using Local Voice Assistant!")

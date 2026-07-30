@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- LLM runtime output is no longer suppressed by the quiet init console: the response text now prints before TTS synthesis so users can read ahead, and the generation spinner, truncation-retry warnings, and reasoning-level change confirmations are visible too (same console-swap pattern as the audio service)
+
 ## [0.5.0] - 2026-07-30
 
 ### Added
