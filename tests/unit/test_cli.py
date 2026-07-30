@@ -34,10 +34,13 @@ class TestParseArgs:
         assert args.vad_min_speech_ms == 250
         assert args.system_prompt is None
         assert args.system_prompt_file is None
+        assert args.enable_web is False
+        assert args.no_web is False
+        assert args.skip_network_probe is False
 
     @pytest.mark.parametrize(
         "flag",
-        ["--no-tts", "--stats", "--test-mic"],
+        ["--no-tts", "--stats", "--test-mic", "--enable-web", "--skip-network-probe"],
     )
     def test_boolean_flags(self, flag):
         with patch("sys.argv", ["localtalk", flag]):
@@ -207,6 +210,47 @@ class TestMain:
         config = mock_va_class.call_args[0][0]
         assert config.audio.vad_threshold == 0.7
         assert config.audio.vad_min_speech_duration_ms == 500
+
+    def test_main_enable_web_sets_policy_on(self, monkeypatch):
+        monkeypatch.delenv("LOCALTALK_ENABLE_WEB", raising=False)
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--enable-web"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "on"
+
+    def test_main_no_web_sets_policy_off(self, monkeypatch):
+        monkeypatch.delenv("LOCALTALK_ENABLE_WEB", raising=False)
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--no-web"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "off"
+
+    def test_main_no_web_wins_over_env_enable(self, monkeypatch):
+        monkeypatch.setenv("LOCALTALK_ENABLE_WEB", "1")
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--no-web"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "off"
+
+    def test_main_env_enable_web_when_no_flag(self, monkeypatch):
+        monkeypatch.setenv("LOCALTALK_ENABLE_WEB", "1")
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "on"
+
+    def test_main_env_disable_web_when_no_flag(self, monkeypatch):
+        monkeypatch.setenv("LOCALTALK_ENABLE_WEB", "0")
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "off"
+
+    def test_main_default_web_policy_auto(self, monkeypatch):
+        monkeypatch.delenv("LOCALTALK_ENABLE_WEB", raising=False)
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "auto"
+
+    def test_main_skip_network_probe(self):
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--skip-network-probe"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.startup_probe is False
 
     def test_main_system_prompt_file_overrides_inline(self, tmp_path):
         prompt_file = tmp_path / "prompt.txt"

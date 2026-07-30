@@ -19,6 +19,12 @@ from localtalk.models.config import AppConfig
 from localtalk.services.audio import AudioService
 from localtalk.services.mlx_llm import MLXLanguageModelService
 from localtalk.services.speech_recognition import SpeechRecognitionService
+from localtalk.services.tools.online import (
+    ConnectivityCache,
+    format_network_status_line,
+    format_privacy_banner_lines,
+)
+from localtalk.utils.console_ui import print_assistant_utterance, print_user_utterance, soft_rule
 
 # Escape character and arrow-key escape sequence prefix
 _ESC = "\x1b"
@@ -166,6 +172,13 @@ class VoiceAssistant:
     def __init__(self, config: AppConfig | None = None):
         self.config = config or AppConfig()
         self.console = Console()
+        self.network_status = None
+        self.connectivity_cache = ConnectivityCache(
+            ttl_s=self.config.web_tools.status_ttl_s,
+            probe_timeout_s=self.config.web_tools.probe_timeout_s,
+            reachability_url=self.config.web_tools.reachability_url,
+        )
+        self._tts_cached = None  # keeps TTS instance when mid-session text-only
 
         # Enhance system prompt with current datetime context
         self._enhance_system_prompt()
@@ -258,15 +271,40 @@ class VoiceAssistant:
 
         # Use Live display for progressive updates
         with Live(create_panel(), refresh_per_second=1, console=self.console) as live:
+            # Network first so policy "auto" can enable online tools before the LLM loads
+            init_messages.append("🌐 Checking network...")
+            live.update(create_panel())
+            if self.config.web_tools.startup_probe:
+                self.network_status = self.connectivity_cache.get(probe=True, force=True)
+            else:
+                self.network_status = self.connectivity_cache.get(probe=False, force=True)
+            self._apply_web_tools_startup_policy()
+            web_enabled = self.config.web_tools.enabled
+            init_messages[-1] = format_network_status_line(self.network_status, web_enabled=web_enabled)
+            if web_enabled:
+                init_messages.append(
+                    '   Online tools on: web_search, browser_*; say "disable web" anytime to go fully local'
+                )
+            else:
+                init_messages.append('   Online tools off — say "enable web" anytime to turn on web search + browser')
+            live.update(create_panel())
+
             # Speech recognition
             init_messages.append(f"👂 Loading Whisper speech-to-text model: {self.config.whisper.model_size}")
             live.update(create_panel())
             self.stt = SpeechRecognitionService(self.config.whisper, quiet_console)
 
-            # Language model with audio support
+            # Language model (tool registry uses web_tools.enabled from policy above)
             init_messages.append(f"🤖 Loading LLM: {self.config.mlx_lm.model}")
             live.update(create_panel())
-            self.llm = MLXLanguageModelService(self.config.mlx_lm, self.config.system_prompt, quiet_console)
+            self.llm = MLXLanguageModelService(
+                self.config.mlx_lm,
+                self.config.system_prompt,
+                quiet_console,
+                web_tools=self.config.web_tools,
+                browser_tools=self.config.browser_tools,
+                connectivity_cache=self.connectivity_cache,
+            )
             # Model loading stays inside the init panel, but runtime output —
             # the response text (printed before TTS so users can read ahead),
             # generation spinner, retry warnings, and reasoning-level updates —
@@ -302,6 +340,11 @@ class VoiceAssistant:
             # live microphone waveform must render to the interactive console.
             self.audio.console = self.console
 
+            # Long tool actions (e.g. knowledge pack downloads) speak a heads-up
+            # before blocking, so the user knows why the assistant paused.
+            self.llm.knowledge_store.console = self.console
+            self.llm.knowledge_store.announce = self._announce_spoken
+
             # Check VAD status
             if self.config.audio.use_vad:
                 if self.audio.vad_model is not None:
@@ -336,20 +379,157 @@ class VoiceAssistant:
                 '(say "think harder" or "think faster" to change it anytime)'
             )
 
+            # Browser check when online tools are on (CDP attach preferred for Chrome)
+            if self.config.web_tools.enabled:
+                from localtalk.services.browser.session import browser_engine_status
+
+                init_messages.append("🧭 Checking browser (CDP attach preferred)...")
+                live.update(create_panel())
+                bt = self.config.browser_tools
+                status = browser_engine_status(
+                    bt.engine,
+                    attach=bt.attach,
+                    cdp_url=bt.cdp_url,
+                )
+                if status.get("ok"):
+                    mode = status.get("mode") or ("attach" if bt.attach else "launch")
+                    init_messages[-1] = f"🧭 Browser: ready ({bt.engine}, {mode}) — {status.get('detail', '')}"
+                    if mode == "attach":
+                        init_messages.append(
+                            f"   CDP {bt.cdp_url} — opens a new tab in your Chrome "
+                            "(cookies/logins available); disconnect leaves Chrome running"
+                        )
+                    elif mode == "launch-fallback":
+                        init_messages.append(
+                            "   Tip: enable Chrome remote debugging for attach "
+                            "(chrome://inspect → Allow remote debugging)"
+                        )
+                else:
+                    init_messages[-1] = f"🧭 Browser: unavailable ({bt.engine}) — {status.get('error')}"
+
+            # Wire mid-session tools that touch assistant-owned services (TTS, VAD, stats)
+            self.llm.bind_session_control(
+                {
+                    "set_stats": self._tool_set_stats,
+                    "set_tts": self._tool_set_tts,
+                    "set_vad_mode": self._tool_set_vad_mode,
+                }
+            )
+
             # Final update with all information
             init_messages.append("\n✅ Ready!")
             live.update(create_panel())
 
         self._print_privacy_banner()
 
+    def _tool_set_stats(self, enabled: bool) -> dict:
+        self.config.show_stats = bool(enabled)
+        self.console.print(f"[cyan]Timing stats set to: {self.config.show_stats}[/cyan]")
+        return {"ok": True, "show_stats": self.config.show_stats}
+
+    def _tool_set_tts(self, enabled: bool) -> dict:
+        if enabled:
+            if self.tts is None:
+                if self._tts_cached is not None:
+                    self.tts = self._tts_cached
+                else:
+                    try:
+                        from localtalk.services.mlx_tts import MLXTextToSpeechService
+
+                        self.tts = MLXTextToSpeechService(self.config.chatterbox, self.console)
+                    except Exception as exc:
+                        return {"ok": False, "error": f"could not enable TTS: {exc}"}
+            self.config.tts_backend = "chatterbox"
+            self.console.print("[cyan]TTS set to: on[/cyan]")
+            return {"ok": True, "tts_enabled": True}
+        # Disable without unloading so re-enable is fast
+        self.config.tts_backend = "none"
+        if self.tts is not None:
+            self._tts_cached = self.tts
+            self.tts = None
+        self.console.print("[cyan]TTS set to: off (text-only)[/cyan]")
+        return {"ok": True, "tts_enabled": False}
+
+    def _tool_set_vad_mode(
+        self,
+        mode: str,
+        *,
+        threshold: float | None = None,
+        min_speech_ms: int | None = None,
+    ) -> dict:
+        mode = mode.lower().strip()
+        if mode == "auto":
+            self.config.audio.use_vad = True
+            self.config.audio.vad_auto_start = True
+        elif mode == "manual":
+            self.config.audio.use_vad = True
+            self.config.audio.vad_auto_start = False
+        elif mode == "off":
+            self.config.audio.use_vad = False
+            self.config.audio.vad_auto_start = False
+        else:
+            return {"ok": False, "error": "mode must be auto, manual, or off"}
+
+        if threshold is not None:
+            if not 0.0 <= threshold <= 1.0:
+                return {"ok": False, "error": "threshold must be between 0 and 1"}
+            self.config.audio.vad_threshold = threshold
+        if min_speech_ms is not None:
+            if min_speech_ms < 0:
+                return {"ok": False, "error": "min_speech_ms must be >= 0"}
+            self.config.audio.vad_min_speech_duration_ms = min_speech_ms
+
+        # Re-validate Silero constraints when auto VAD is on
+        try:
+            self.config.audio = self.config.audio.model_validate(self.config.audio.model_dump())
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        self.console.print(
+            f"[cyan]VAD mode set to: {mode} "
+            f"(threshold={self.config.audio.vad_threshold}, "
+            f"min_speech_ms={self.config.audio.vad_min_speech_duration_ms})[/cyan]"
+        )
+        return {
+            "ok": True,
+            "vad_mode": mode,
+            "use_vad": self.config.audio.use_vad,
+            "vad_auto_start": self.config.audio.vad_auto_start,
+            "threshold": self.config.audio.vad_threshold,
+            "min_speech_ms": self.config.audio.vad_min_speech_duration_ms,
+        }
+
+    def _apply_web_tools_startup_policy(self) -> None:
+        """Set web_tools.enabled from policy + network status (before LLM init)."""
+        policy = self.config.web_tools.policy
+        reachable = bool(self.network_status and self.network_status.reachable)
+        if policy == "on":
+            enabled = True
+        elif policy == "off":
+            enabled = False
+        else:  # auto
+            enabled = reachable
+        self.config.web_tools.enabled = enabled
+        self.config.browser_tools.enabled = enabled
+
     def _print_privacy_banner(self):
         """Print privacy information banner."""
+        status = self.network_status
+        if status is None:
+            status_lines = [
+                "✅ Everything runs 100% locally on your Mac",
+                "✅ No tracking, no telemetry, no cloud APIs",
+                "",
+                "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            ]
+        else:
+            status_lines = format_privacy_banner_lines(status, web_enabled=self.config.web_tools.enabled)
         privacy_content = [
-            "✅ Everything runs 100% locally on your Mac",
-            "✅ No tracking, no telemetry, no cloud APIs",
-            "",
-            "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            *status_lines,
             '[dim]💡 TIP: Adjust thinking depth anytime — say "think harder", "think faster", or "use low/medium/high reasoning"[/dim]',
+            '[dim]💡 TIP: Toggle online tools anytime — say "enable web" or "disable web"[/dim]',
+            "[dim]💡 TIP: Other startup knobs are voice-toggleable too — TTS, stats, VAD mode, browser engine, generation[/dim]",
+            '[dim]💡 TIP: Download offline Wikipedia anytime — say "download offline knowledge"[/dim]',
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
@@ -379,6 +559,25 @@ class VoiceAssistant:
                     self.console.print("[dim]   (Audio will be resampled to 16kHz for VAD/Whisper)[/dim]")
         except Exception:
             pass
+
+    def _announce_spoken(self, text: str) -> None:
+        """Speak a mid-turn status message (e.g. before a long knowledge download).
+
+        Used while a tool is still running, so the user hears what to expect
+        instead of sitting through a silent multi-minute pause.
+        """
+        spoken = _strip_markdown(text).strip()
+        if not spoken:
+            return
+        print_assistant_utterance(self.console, spoken)
+        if not self.tts or not getattr(self, "audio", None):
+            return
+        try:
+            with self.console.status("[cyan]Synthesizing speech...[/cyan]", spinner="dots"):
+                sample_rate, audio_array = self.tts.synthesize_long_form(spoken)
+            self.audio.play_audio(audio_array, sample_rate)
+        except Exception as exc:
+            self.console.print(f"[yellow]Warning: could not speak announcement: {exc}[/yellow]")
 
     def _get_text_input(self) -> str | None:
         """Get text input from user. Returns None if Esc pressed (go back to voice mode)."""
@@ -418,12 +617,14 @@ class VoiceAssistant:
                 self.console.print(f"[dim]📊 Total: {total_time:.2f}s[/dim]")
 
             self.audio.play_audio(audio_array, sample_rate)
+            soft_rule(self.console)
         else:
             self.console.print("[dim]Note: TTS is disabled.[/dim]")
+            soft_rule(self.console)
 
     def _process_text_response(self, user_input: str) -> None:
         """Generate and play response for text input."""
-        self.console.print(f"[green]You: {user_input}")
+        print_user_utterance(self.console, user_input)
         self._respond(user_input)
 
     def _process_voice_response(self, audio_data) -> None:
@@ -457,7 +658,7 @@ class VoiceAssistant:
             self.console.print("[yellow]No speech detected. Please speak clearly and try again.")
             return
 
-        self.console.print(f"[green]You: {text}")
+        print_user_utterance(self.console, text)
         self._respond(text, stt_time)
 
     def process_voice_input(self) -> bool:
@@ -597,4 +798,9 @@ class VoiceAssistant:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         self.console.print("\n[red]Exiting...")
+        if getattr(self, "llm", None) is not None:
+            try:
+                self.llm.close()
+            except Exception:
+                pass
         self.console.print("[blue]Thank you for using Local Voice Assistant!")

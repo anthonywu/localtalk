@@ -1,15 +1,28 @@
 """Audio recording and playback service."""
 
 import queue
+import sys
 import threading
 import time
+from collections import deque
 
 import numpy as np
 import torch
 from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from localtalk.models.config import AudioConfig
-from localtalk.utils.waveform import WAVEFORM_WIDTH, level_to_block
+from localtalk.utils.console_ui import blank_line
+from localtalk.utils.waveform import (
+    DEFAULT_LEVEL_CHUNK_SIZE,
+    WAVEFORM_WIDTH,
+    compute_playback_levels,
+    level_to_block,
+    render_waveform,
+)
 
 
 class AudioService:
@@ -66,12 +79,6 @@ class AudioService:
         Records for the specified duration and displays real-time audio levels.
         Returns True if audio was detected, False otherwise.
         """
-        from collections import deque
-
-        from rich.live import Live
-        from rich.table import Table
-        from rich.text import Text
-
         self.console.print(f"\n[cyan]🎤 Testing microphone for {duration_seconds} seconds...[/cyan]")
         self.console.print("[dim]Speak into your microphone to test audio levels.[/dim]\n")
 
@@ -165,8 +172,6 @@ class AudioService:
             return table
 
         # Record and display
-        import sys
-
         sys.stdout.flush()
 
         num_samples = int(duration_seconds * self.config.sample_rate / self.config.chunk_size)
@@ -261,7 +266,7 @@ class AudioService:
         return audio_np
 
     def play_audio(self, audio_array: np.ndarray, sample_rate: int | None = None):
-        """Play audio array.
+        """Play audio array with a live scrolling waveform.
 
         Args:
             audio_array: Audio data as numpy array
@@ -275,15 +280,13 @@ class AudioService:
             audio_array = audio_array.astype(np.float32)
 
         # Ensure audio is in range [-1, 1]
-        if np.abs(audio_array).max() > 1.0:
+        if audio_array.size > 0 and np.abs(audio_array).max() > 1.0:
             audio_array = audio_array / np.abs(audio_array).max()
 
-        self.console.print("[cyan]🔊 Playing audio...")
+        blank_line(self.console)
 
         try:
-            # Try to play with current default device
-            self.sd.play(audio_array, sample_rate)
-            self.sd.wait()
+            self._play_with_waveform(audio_array, sample_rate)
         except self.sd.PortAudioError as e:
             self.console.print(f"[yellow]Audio playback error: {e}")
             self.console.print("[yellow]Attempting fallback playback...")
@@ -292,12 +295,86 @@ class AudioService:
             try:
                 # Reset to default device
                 self.sd.default.reset()
-                self.sd.play(audio_array, sample_rate)
-                self.sd.wait()
+                self._play_with_waveform(audio_array, sample_rate)
             except Exception as e2:
                 # Final fallback: try to find a working output device
                 self.console.print(f"[yellow]Fallback failed: {e2}")
                 self._try_alternative_playback(audio_array, sample_rate)
+
+    def _play_with_waveform(
+        self,
+        audio_array: np.ndarray,
+        sample_rate: int,
+        *,
+        device: int | None = None,
+    ) -> None:
+        """Play audio while animating the same Unicode waveform used for input capture."""
+        play_kwargs: dict = {}
+        if device is not None:
+            play_kwargs["device"] = device
+
+        levels = compute_playback_levels(audio_array, chunk_size=DEFAULT_LEVEL_CHUNK_SIZE)
+        duration = float(len(audio_array)) / float(sample_rate) if sample_rate > 0 else 0.0
+
+        def create_playback_display(progress_idx: int) -> Panel:
+            # Sliding window of levels up to the current playback position
+            window_start = max(0, progress_idx - WAVEFORM_WIDTH)
+            window = levels[window_start:progress_idx]
+            current_level = window[-1][0] if window else 0.0
+
+            table = Table(show_header=False, box=None, padding=0)
+            table.add_row("[bold cyan]🔊 Playing audio...[/bold cyan]")
+
+            waveform = render_waveform(window)
+            waveform_row = Text()
+            waveform_row.append("    ")
+            waveform_row.append_text(waveform)
+            table.add_row(waveform_row)
+
+            level_indicator = "●" if current_level > 0.02 else "○"
+            level_color = "green" if current_level > 0.02 else "dim"
+            elapsed = min(duration, progress_idx * DEFAULT_LEVEL_CHUNK_SIZE / sample_rate) if sample_rate else 0.0
+            table.add_row(
+                f"    [{level_color}]{level_indicator}[/{level_color}] "
+                f"Level: {current_level:.3f}  {elapsed:.1f}s / {duration:.1f}s",
+            )
+            return Panel(table, title="🔊 Playback", border_style="cyan", expand=False)
+
+        self.sd.play(audio_array, sample_rate, **play_kwargs)
+
+        # No samples / zero duration: just wait for the device buffer to drain.
+        if not levels or duration <= 0:
+            self.sd.wait()
+            return
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        start = time.monotonic()
+        with Live(
+            create_playback_display(1),
+            refresh_per_second=15,
+            console=self.console,
+            transient=True,
+        ) as live:
+            while True:
+                elapsed = time.monotonic() - start
+                if elapsed >= duration:
+                    break
+                progress_idx = min(
+                    len(levels),
+                    max(1, int(elapsed * sample_rate / DEFAULT_LEVEL_CHUNK_SIZE) + 1),
+                )
+                live.update(create_playback_display(progress_idx))
+                time.sleep(0.05)
+
+            # Final full-window frame
+            live.update(create_playback_display(len(levels)))
+
+        # Drain any remaining buffer (timing vs device clock can drift slightly)
+        self.sd.wait()
+        sys.stdout.flush()
+        sys.stderr.flush()
 
     def _try_alternative_playback(self, audio_array: np.ndarray, sample_rate: int):
         """Try alternative playback methods."""
@@ -309,8 +386,7 @@ class AudioService:
             for device_id in output_devices:
                 try:
                     self.console.print(f"[yellow]Trying device {device_id}: {devices[device_id]['name']}")
-                    self.sd.play(audio_array, sample_rate, device=device_id)
-                    self.sd.wait()
+                    self._play_with_waveform(audio_array, sample_rate, device=device_id)
                     self.console.print("[green]Audio playback successful!")
                     # Set as default for future playback
                     self.sd.default.device[1] = device_id

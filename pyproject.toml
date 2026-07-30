@@ -1,6 +1,6 @@
 [project]
 name = "localtalk"
-version = "0.5.0"
+version = "0.6.0"
 description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,8 +37,10 @@ classifiers = [
 dependencies = [
     "einops>=0.8.0",  # via mlx-audio
     "hf-transfer>=0.1.9",  # direct; also via mlx-audio
+    "httpx>=0.28.0",
     "huggingface-hub>=0.36.0,<1.0",  # direct; also via mlx-audio, mlx-lm, mlx-vlm, transformers
     "librosa>=0.11.0",  # via mlx-audio
+    "libzim>=3.8.0",
     "mistune>=3.2.0,<4.0",  # direct
     "mlx>=0.32.0",  # direct; also via mlx-audio, mlx-lm, mlx-vlm
     "mlx-audio>=0.2.9",  # direct
@@ -59,6 +61,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+    "playwright>=1.49.0",
+]
 dev = [
     "plotext>=5.3.2",
     "pytest>=8.4.0",
@@ -76,7 +81,7 @@ Repository = "https://github.com/anthonywu/localtalk.git"
 Issues = "https://github.com/anthonywu/localtalk/issues"
 
 [build-system]
-requires = ["uv_build>=0.8.3,<0.9.0"]
+requires = ["uv_build>=0.12.0,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.ruff]

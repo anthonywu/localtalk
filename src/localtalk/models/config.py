@@ -52,6 +52,76 @@ class ChatterBoxConfig(BaseModel):
     silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
 
 
+class WebToolsConfig(BaseModel):
+    """Online tools (web_search + browser). Effective state is ``enabled``.
+
+    Startup policy:
+    - auto (default): enable when the Mac is reachable on the internet
+    - on: always enable (CLI --enable-web)
+    - off: always disable (CLI --no-web)
+    Mid-session: model can call set_web_tools to flip ``enabled``.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Runtime switch: register web_search + browser tools when True",
+    )
+    policy: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description="Startup policy: auto from network reachability, or force on/off",
+    )
+    max_tool_rounds: int = Field(default=3, ge=1, le=8, description="Max Harmony tool rounds per user turn")
+    search_max_results: int = Field(default=3, ge=1, le=5, description="Default web_search result count")
+    search_timeout_s: float = Field(default=8.0, ge=1.0, le=30.0, description="HTTP timeout for web search")
+    probe_timeout_s: float = Field(default=2.0, ge=0.5, le=10.0, description="Startup/reachability probe timeout")
+    status_ttl_s: float = Field(default=45.0, ge=0.0, description="Cached NetworkStatus TTL in seconds")
+    startup_probe: bool = Field(default=True, description="Probe connectivity during startup")
+    reachability_url: str = Field(
+        default="https://connectivitycheck.gstatic.com/generate_204",
+        description="URL used for L2 reachability probe",
+    )
+    backend: Literal["wikipedia"] = Field(default="wikipedia", description="Web search backend")
+
+
+class BrowserToolsConfig(BaseModel):
+    """Playwright browser tools (enabled with online tools).
+
+    Chrome default: attach over CDP (Chrome DevTools Protocol) to the user's
+    running Chrome when remote debugging is on; fall back to launching Chrome.
+    Safari uses Playwright WebKit (no CDP attach).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Register browser_* tools when True (tracks web_tools.enabled)",
+    )
+    engine: Literal["chrome", "safari"] = Field(
+        default="chrome",
+        description="Browser engine: chrome (system Chrome / CDP) or safari (Playwright WebKit)",
+    )
+    attach: bool = Field(
+        default=True,
+        description="Prefer attaching to Chrome via CDP (default on); fall back to launch if unavailable",
+    )
+    cdp_url: str = Field(
+        default="http://127.0.0.1:9222",
+        description="Chrome DevTools Protocol endpoint for attach mode",
+    )
+    headed: bool = Field(
+        default=False,
+        description="When launching (not attaching), show a browser window (default headless launch)",
+    )
+    max_tool_rounds: int = Field(
+        default=12,
+        ge=1,
+        le=20,
+        description="Max Harmony tool rounds per turn when browser tools are enabled",
+    )
+    navigation_timeout_ms: int = Field(default=20000, ge=1000, le=120000, description="page.goto timeout")
+    snapshot_max_chars: int = Field(default=6000, ge=500, le=20000, description="Max chars for browser_snapshot")
+    extract_max_chars: int = Field(default=4000, ge=200, le=20000, description="Max chars for browser_extract_text")
+
+
 class AudioConfig(BaseModel):
     """Configuration for audio recording and playback."""
 
@@ -95,9 +165,11 @@ class AppConfig(BaseModel):
     mlx_lm: MLXLMConfig = Field(default_factory=MLXLMConfig)
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
+    web_tools: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    browser_tools: BrowserToolsConfig = Field(default_factory=BrowserToolsConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
-        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user. Answer every question directly; never apologize or claim you cannot respond. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",
+        default="You are a helpful and friendly AI assistant for an adult user on their private Mac. You are polite and aim to provide concise responses of less than 20 words. You are aware of the current date and time. Answer every question directly; never apologize, never refuse for content-policy theater, and never claim you cannot respond when tools or knowledge can help. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",
         description="System prompt for the LLM",
     )
     tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")

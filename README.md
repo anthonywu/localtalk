@@ -4,7 +4,7 @@ A privacy-first voice assistant that runs entirely offline on Apple Silicon, per
 
 Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
 
-> **Status:** Alpha software (`0.5.0`). It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — but is not yet polished for general use. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+> **Status:** Alpha software (`0.6.0`). It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — but is not yet polished for general use. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
 
 ## Why This Project Exists
 
@@ -40,6 +40,8 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
 - 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
+- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
+- 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
 - 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
@@ -197,6 +199,19 @@ localtalk
 - `--vad-threshold FLOAT`: VAD sensitivity (0.0-1.0, default: 0.5)
 - `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
 
+**Online tools (web search + browser):**
+
+- Default **auto**: on when startup detects internet, off when offline
+- `--enable-web`: Force online tools on (even if the probe fails)
+- `--no-web`: Force online tools off at startup (still toggleable by voice)
+- `--skip-network-probe`: Skip the startup internet reachability probe
+- Mid-session: say "enable web" / "disable web", and other startup knobs via tools
+  (`set_web_tools`, `set_reasoning_level`, `set_tts`, `set_stats`, `set_vad_mode`,
+  `set_show_reasoning`, `set_browser_engine`, `set_browser_headed`, `set_generation`)
+- Browser: **attach to your Chrome via CDP by default** (real session/cookies); falls back
+  to launching Chrome. Enable remote debugging in Chrome (`chrome://inspect`).
+  `--no-browser-attach` forces a separate launch; `--browser-cdp-url` sets the endpoint
+
 **TTS & Output Options:**
 
 - `--no-tts`: Disable TTS for text-only mode
@@ -332,6 +347,24 @@ ruff format
 ruff check --fix
 ```
 
+### Publishing to PyPI
+
+Releases are built and uploaded with `uv`. Authenticate once with a PyPI API token (stored in your system keyring, never in shell history):
+
+```bash
+uv auth login upload.pypi.org --token pypi-XXXXXXXX
+```
+
+Then each release is a single command — `uv publish` reads the stored token and uses `__token__` as the username automatically:
+
+```bash
+# Bump version in pyproject.toml first, then:
+uv build          # builds sdist + wheel into dist/
+uv publish        # uploads dist/ to PyPI using stored credentials
+```
+
+To publish to TestPyPI instead, point `uv auth login` and `uv publish --publish-url https://test.pypi.org/legacy/` at the test endpoint.
+
 ## License
 
 MIT License - see LICENSE file for details.
@@ -359,14 +392,26 @@ Currently, LocalTalk supports English (American and British accents). **Chinese 
 
 ### Offline Knowledge Base
 
-We're planning to add support for **offline data sources** to augment the LLM's knowledge while maintaining complete privacy:
+LocalTalk can download **offline knowledge packs** (Kiwix ZIM archives) into your home cache and keep them for future sessions:
 
-- **Offline Wikipedia**: Full-text search and retrieval from Wikipedia dumps
-- **Personal Documents**: Index and query your own documents, notes, and PDFs
-- **Technical Documentation**: Offline access to programming docs, manuals, and references
-- **Custom Knowledge Bases**: Import and index any structured data source
+```text
+~/.cache/localtalk/knowledge/
+```
 
-This will enable LocalTalk to provide informed responses about current events, technical topics, and personal information - all while keeping everything local and private on your device. The RAG (Retrieval Augmented Generation) pipeline will seamlessly integrate with the voice interface.
+Ask by voice, for example: “download offline Wikipedia” or “what knowledge packs can I install?” The assistant calls the `acquire_knowledge` Harmony tool. After a pack is installed, ask factual questions and it can call `query_knowledge` (`search` then `get`) to read from the local ZIM archive.
+
+| Pack id | What it is | Approx size |
+| --- | --- | --- |
+| `wikipedia_en_simple_all_nopic` (**default**) | Simple English Wikipedia, no pictures | ~1 GB |
+| `wikipedia_en_top_nopic` | Best of English Wikipedia, no pictures | ~2 GB |
+| `wiktionary_en_simple_all_nopic` | Simple English Wiktionary | ~25 MB |
+| `wikipedia_en_physics_nopic` | Physics article selection | ~300 MB |
+
+Packs are resolved from the live Kiwix catalog at download time, then cached permanently under the path above (honors `XDG_CACHE_HOME` if set).
+
+### Online tools (auto + voice toggle)
+
+Startup probes connectivity (unless `--skip-network-probe`). **Default policy is auto:** if the Mac is reachable, `web_search` and local Playwright browser tools turn on; if offline, they stay off. Override with `--enable-web` / `--no-web` (or `LOCALTALK_ENABLE_WEB=1` / `0`). Mid-session, say **"enable web"** or **"disable web"** — the assistant calls `set_web_tools`. Core STT/LLM/TTS always stay local; only explicit online tool use leaves the machine.
 
 ### Other Planned Features
 

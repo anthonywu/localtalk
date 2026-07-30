@@ -10,9 +10,30 @@ import pytest
 from rich.console import Console
 
 from localtalk.models.config import MLXLMConfig, ReasoningLevel
-from localtalk.services.mlx_llm import _REASONING_MAP
+from localtalk.services.tools.reasoning import _REASONING_MAP
 
 pytestmark = pytest.mark.unit
+
+
+def _wire_tool_defaults(service, *, web_enabled: bool = False):
+    """Attach registry + web/knowledge deps required by generate_response.
+
+    ``web_enabled`` is the master switch for web_search + browser tools.
+    """
+    from localtalk.models.config import BrowserToolsConfig, WebToolsConfig
+    from localtalk.services.browser.session import BrowserSession
+    from localtalk.services.mlx_llm import MLXLanguageModelService
+    from localtalk.services.tools.online import ConnectivityCache
+
+    service.knowledge_store = getattr(service, "knowledge_store", None) or MagicMock()
+    service.knowledge_query = getattr(service, "knowledge_query", None) or MagicMock()
+    service.web_tools = WebToolsConfig(enabled=web_enabled, max_tool_rounds=3)
+    service.browser_tools = BrowserToolsConfig(enabled=web_enabled)
+    service.browser_session = MagicMock(spec=BrowserSession) if web_enabled else None
+    service.session_control = {}
+    service.connectivity_cache = ConnectivityCache(ttl_s=45.0)
+    service.tool_registry = MLXLanguageModelService._build_tool_registry(service)
+    return service
 
 
 # ────────────────────────── reasoning map ──────────────────────────
@@ -56,7 +77,7 @@ class TestSaveAudioToTempFile:
         service.tokenizer = MagicMock()
         service.stream_generate = MagicMock()
         service.harmony = MagicMock()
-        return service
+        return _wire_tool_defaults(service)
 
     def test_empty_audio_raises(self):
         service = self._make_service()
@@ -145,7 +166,7 @@ class TestSessionHistory:
         service.tokenizer = MagicMock()
         service.stream_generate = MagicMock()
         service.harmony = MagicMock()
-        return service
+        return _wire_tool_defaults(service)
 
     def test_get_session_history_creates_new(self):
         service = self._make_service()
@@ -194,7 +215,7 @@ class TestGenerateResponse:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded fallback"
-        return service
+        return _wire_tool_defaults(service)
 
     @pytest.fixture
     def mock_parser(self, monkeypatch):
@@ -301,7 +322,7 @@ class TestReasoningChannelFiltering:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "RAW_REAS_NO_FINAL"
-        return service
+        return _wire_tool_defaults(service)
 
     def _patch_parser(self, monkeypatch, messages):
         """Patch StreamableParser to inject pre-built parsed messages."""
@@ -423,7 +444,7 @@ class TestFallbackAndRetry:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded"
-        return service
+        return _wire_tool_defaults(service)
 
     @staticmethod
     def _patch_parsers(monkeypatch, message_lists):
@@ -513,7 +534,7 @@ class TestFallbackAndRetry:
 class TestReasoningToolCalls:
     """Mid-session reasoning changes via the set_reasoning_level harmony tool."""
 
-    def _make_service(self):
+    def _make_service(self, web_enabled: bool = False):
         from openai_harmony import ReasoningEffort
 
         from localtalk.services.mlx_llm import MLXLanguageModelService
@@ -533,7 +554,9 @@ class TestReasoningToolCalls:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded"
-        return service
+        service.knowledge_store = MagicMock()
+        service.knowledge_query = MagicMock()
+        return _wire_tool_defaults(service, web_enabled=web_enabled)
 
     @staticmethod
     def _patch_parsers(monkeypatch, message_lists):
@@ -556,7 +579,7 @@ class TestReasoningToolCalls:
         return conv_mock
 
     @staticmethod
-    def _tool_call_msg(args: dict):
+    def _tool_call_msg(args: dict, tool_name: str = "set_reasoning_level"):
         import json
 
         from openai_harmony import Message, Role
@@ -564,7 +587,7 @@ class TestReasoningToolCalls:
         return (
             Message.from_role_and_content(Role.ASSISTANT, json.dumps(args))
             .with_channel("commentary")
-            .with_recipient("functions.set_reasoning_level")
+            .with_recipient(f"functions.{tool_name}")
         )
 
     @staticmethod
@@ -656,12 +679,127 @@ class TestReasoningToolCalls:
         rendered_msgs = conv_mock.call_args[0][0]
         assert rendered_msgs[0].author.role == Role.SYSTEM
         assert rendered_msgs[1].author.role == Role.DEVELOPER
-        # The reasoning tool is registered in the developer message
+        # Reasoning + knowledge + online tools are registered in the developer message
         dev_dump = rendered_msgs[1].content[0].model_dump()
         tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
         assert "set_reasoning_level" in tool_names
+        assert "set_web_tools" in tool_names
+        assert "acquire_knowledge" in tool_names
+        assert "query_knowledge" in tool_names
+        assert "check_online" in tool_names
+        assert "web_search" not in tool_names
         # History follows the system/developer messages
         assert rendered_msgs[2].author.role == Role.USER
+
+    def test_web_and_browser_tools_registered_when_enabled(self, monkeypatch):
+        """When web_tools.enabled is True, web_search + browser_* tools are registered."""
+        from openai_harmony import Role
+
+        service = self._make_service(web_enabled=True)
+        service.chat_history["default"] = []
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(return_value=iter([stop]))
+        conv_mock = self._patch_parsers(monkeypatch, [[self._final_msg("ok")]])
+
+        service.generate_response("hi")
+
+        rendered_msgs = conv_mock.call_args[0][0]
+        dev_dump = rendered_msgs[1].content[0].model_dump()
+        tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
+        assert "web_search" in tool_names
+        assert "browser_navigate" in tool_names
+        assert "browser_extract_text" in tool_names
+        assert "browser_close" in tool_names
+        assert "set_web_tools" in tool_names
+        assert Role.DEVELOPER == rendered_msgs[1].author.role
+        assert "Online tools are currently ON" in rendered_msgs[1].content[0].instructions
+        assert service._max_tool_rounds() == 12
+
+    def test_set_web_tools_toggle_mid_session(self, monkeypatch):
+        """set_web_tools enables/disables web tools and rebuilds the registry."""
+        service = self._make_service(web_enabled=False)
+        assert "web_search" not in service.tool_registry.names()
+        assert "set_web_tools" in service.tool_registry.names()
+
+        result = service.set_web_tools_enabled(True)
+        assert result["ok"] is True
+        assert result["web_tools_enabled"] is True
+        assert "web_search" in service.tool_registry.names()
+        assert "browser_navigate" in service.tool_registry.names()
+
+        result = service.set_web_tools_enabled(False)
+        assert result["web_tools_enabled"] is False
+        assert "web_search" not in service.tool_registry.names()
+        assert "set_web_tools" in service.tool_registry.names()
+
+    def test_set_web_tools_tool_call_roundtrip(self, monkeypatch, capsys):
+        service = self._make_service(web_enabled=False)
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"enabled": True}, tool_name="set_web_tools")],
+                [self._final_msg("Online tools are on.")],
+            ],
+        )
+
+        result = service.generate_response("enable web please")
+
+        assert result == "Online tools are on."
+        assert service.web_tools.enabled is True
+        assert "web_search" in service.tool_registry.names()
+        assert "Online tools set to: on" in capsys.readouterr().out
+
+    def test_pending_tool_on_last_round_still_runs(self, monkeypatch):
+        """A tool call queued when the round budget is exhausted is still dispatched once."""
+        from openai_harmony import ReasoningEffort
+
+        service = self._make_service()
+        service.web_tools.max_tool_rounds = 1
+        stops = [MagicMock(token=i, finish_reason="stop") for i in range(6)]
+        service.stream_generate = MagicMock(side_effect=[iter([s]) for s in stops])
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"level": "medium"})],
+                [self._tool_call_msg({"level": "high"})],
+                [self._final_msg("Now at high.")],
+            ],
+        )
+
+        result = service.generate_response("think then think harder")
+
+        assert result == "Now at high."
+        assert service.reasoning_effort == ReasoningEffort.HIGH
+
+    def test_set_web_tools_raises_round_budget_mid_turn(self, monkeypatch):
+        """Enabling web mid-turn expands max_tool_rounds so later tools still run."""
+        from openai_harmony import ReasoningEffort
+
+        service = self._make_service(web_enabled=False)
+        assert service._max_tool_rounds() == 3
+        stops = [MagicMock(token=i, finish_reason="stop") for i in range(20)]
+        service.stream_generate = MagicMock(side_effect=[iter([s]) for s in stops])
+        # 5 tool calls exceeds offline budget (3) + one overflow; needs live browser budget.
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"enabled": True}, tool_name="set_web_tools")],
+                [self._tool_call_msg({"level": "medium"})],
+                [self._tool_call_msg({"level": "high"})],
+                [self._tool_call_msg({"level": "low"})],
+                [self._tool_call_msg({"level": "medium"})],
+                [self._final_msg("All done.")],
+            ],
+        )
+
+        result = service.generate_response("enable web and tune reasoning")
+
+        assert result == "All done."
+        assert service.web_tools.enabled is True
+        assert service.reasoning_effort == ReasoningEffort.MEDIUM
+        assert service._max_tool_rounds() == 12
 
     def test_no_tool_call_leaves_effort_unchanged(self, monkeypatch):
         from openai_harmony import ReasoningEffort
@@ -677,3 +815,137 @@ class TestReasoningToolCalls:
         assert service.reasoning_effort == ReasoningEffort.LOW
         assert service.stream_generate.call_count == 1
         assert len(service.chat_history["default"]) == 2
+
+
+class TestAcquireKnowledgeToolCalls:
+    """Offline knowledge pack downloads via the acquire_knowledge harmony tool."""
+
+    def _make_service(self):
+        return TestReasoningToolCalls()._make_service()
+
+    def test_acquire_knowledge_downloads_default_pack(self, monkeypatch, capsys):
+        from openai_harmony import Role
+
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {
+            "ok": True,
+            "already_installed": False,
+            "pack_id": "wikipedia_en_simple_all_nopic",
+            "title": "Simple English Wikipedia",
+            "path": "/tmp/cache/pack.zim",
+            "message": "Downloaded Simple English Wikipedia into the local cache.",
+        }
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [TestReasoningToolCalls._tool_call_msg({}, tool_name="acquire_knowledge")],
+                [TestReasoningToolCalls._final_msg("Downloaded Simple English Wikipedia for you.")],
+            ],
+        )
+
+        result = service.generate_response("download offline wikipedia")
+
+        assert result == "Downloaded Simple English Wikipedia for you."
+        service.knowledge_store.acquire.assert_called_once_with(None)
+        history = service.chat_history["default"]
+        assert history[1].recipient == "functions.acquire_knowledge"
+        assert history[2].author.role == Role.TOOL
+        assert "Acquiring knowledge pack" in capsys.readouterr().out
+
+    def test_acquire_knowledge_list_pack(self, monkeypatch):
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {
+            "ok": True,
+            "packs": [{"id": "wikipedia_en_simple_all_nopic", "title": "Simple English Wikipedia", "installed": False}],
+            "default_pack": "wikipedia_en_simple_all_nopic",
+        }
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [TestReasoningToolCalls._tool_call_msg({"pack": "list"}, tool_name="acquire_knowledge")],
+                [],
+            ],
+        )
+
+        result = service.generate_response("what knowledge packs can I install?")
+
+        service.knowledge_store.acquire.assert_called_once_with("list")
+        assert "Simple English Wikipedia" in result
+
+    def test_acquire_knowledge_failure_fallback(self, monkeypatch):
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {"ok": False, "error": "network down"}
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"pack": "wiktionary_en_simple_all_nopic"},
+                        tool_name="acquire_knowledge",
+                    )
+                ],
+                [],
+            ],
+        )
+
+        result = service.generate_response("download the dictionary")
+
+        assert result == "Sorry, I couldn't download that knowledge pack."
+        service.knowledge_store.acquire.assert_called_once_with("wiktionary_en_simple_all_nopic")
+
+
+class TestQueryKnowledgeToolLoop:
+    """Multi-round offline query_knowledge search → get."""
+
+    def test_search_then_get_rounds(self, monkeypatch):
+        service = TestReasoningToolCalls()._make_service()
+        service.knowledge_query.query.side_effect = [
+            {
+                "ok": True,
+                "action": "search",
+                "hits": [{"title": "Paris", "path": "A/Paris", "pack_id": "wikipedia_en_simple_all_nopic"}],
+            },
+            {
+                "ok": True,
+                "action": "get",
+                "title": "Paris",
+                "text": "Paris is the capital of France.",
+                "pack_id": "wikipedia_en_simple_all_nopic",
+            },
+        ]
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"action": "search", "query": "capital of France"},
+                        tool_name="query_knowledge",
+                    )
+                ],
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"action": "get", "query": "Paris"},
+                        tool_name="query_knowledge",
+                    )
+                ],
+                [TestReasoningToolCalls._final_msg("Paris is the capital of France.")],
+            ],
+        )
+
+        result = service.generate_response("What is the capital of France?")
+
+        assert result == "Paris is the capital of France."
+        assert service.knowledge_query.query.call_count == 2
+        history = service.chat_history["default"]
+        # user + search call + result + get call + result + final
+        assert len(history) == 6
+        assert history[1].recipient == "functions.query_knowledge"
+        assert history[3].recipient == "functions.query_knowledge"

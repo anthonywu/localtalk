@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from localtalk.utils.console_ui import blank_line, print_stage
 from localtalk.utils.waveform import WAVEFORM_WIDTH, level_to_block, render_waveform
 
 __all__ = ["level_to_block", "record_with_vad_automatic"]
@@ -326,7 +327,12 @@ def record_with_vad_automatic(
 
     # Extract speech segments
     if speech_segments:
-        audio_service.console.print(f"[green]Processing {len(speech_segments)} speech segment(s)[/green]")
+        blank_line(audio_service.console)
+        print_stage(
+            audio_service.console,
+            f"▸ Processing {len(speech_segments)} speech segment(s)",
+            style="bold green",
+        )
 
         speech_audio = []
 
@@ -340,7 +346,11 @@ def record_with_vad_automatic(
 
             if end_sample > start_sample:
                 segment_duration = (end_sample - start_sample) / audio_service.config.sample_rate
-                audio_service.console.print(f"[dim]Segment: {segment_duration:.1f}s[/dim]")
+                print_stage(
+                    audio_service.console,
+                    f"  Segment: {segment_duration:.1f}s",
+                    style="dim",
+                )
                 speech_audio.append(full_audio[start_sample:end_sample])
 
         if speech_audio:

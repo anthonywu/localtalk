@@ -8,7 +8,13 @@ import numpy as np
 import pytest
 
 from localtalk.services.audio_vad_auto import record_with_vad_automatic
-from localtalk.utils.waveform import WAVEFORM_BLOCKS, WAVEFORM_WIDTH, level_to_block, render_waveform
+from localtalk.utils.waveform import (
+    WAVEFORM_BLOCKS,
+    WAVEFORM_WIDTH,
+    compute_playback_levels,
+    level_to_block,
+    render_waveform,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +51,33 @@ class TestLevelToBlock:
     )
     def test_block_index_mapping(self, level, expected_index):
         assert level_to_block(level) == WAVEFORM_BLOCKS[expected_index]
+
+
+# ────────────────────────── compute_playback_levels ──────────────────────────
+
+
+class TestComputePlaybackLevels:
+    def test_empty_audio(self):
+        assert compute_playback_levels(np.array([], dtype=np.float32)) == []
+
+    def test_chunking_and_activity(self):
+        # Two chunks of 4 samples: loud then quiet
+        loud = np.full(4, 0.5, dtype=np.float32)
+        quiet = np.full(4, 0.001, dtype=np.float32)
+        audio = np.concatenate([loud, quiet])
+        levels = compute_playback_levels(audio, chunk_size=4, active_threshold=0.02)
+        assert len(levels) == 2
+        assert levels[0][0] == pytest.approx(0.5)
+        assert levels[0][1] is True
+        assert levels[1][0] == pytest.approx(0.001)
+        assert levels[1][1] is False
+
+    def test_partial_final_chunk(self):
+        audio = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        levels = compute_playback_levels(audio, chunk_size=2)
+        assert len(levels) == 2
+        assert levels[0][0] == pytest.approx(0.2)
+        assert levels[1][0] == pytest.approx(0.3)
 
 
 # ────────────────────────── render_waveform ──────────────────────────
