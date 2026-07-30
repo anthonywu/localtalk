@@ -4,6 +4,8 @@ import json
 import os
 import platform
 import tempfile
+from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -36,18 +38,27 @@ from localtalk.services.tools.settings import (
     make_set_generation_tool,
     make_set_show_reasoning_tool,
     make_set_stats_tool,
+    make_set_stt_model_tool,
+    make_set_tts_model_tool,
     make_set_tts_tool,
     make_set_vad_mode_tool,
 )
 from localtalk.services.tools.web import make_web_search_tool
 from localtalk.services.tools.web_toggle import make_set_web_tools_tool
 from localtalk.utils.console_ui import print_assistant_utterance
+from localtalk.utils.text_processing import chunk_text_for_streaming, take_complete_sentences
+
+# Callback for complete spoken sentences as the final channel streams.
+SpokenSentenceSink = Callable[[str], None]
 
 _SETTINGS_PROMPT_ADDENDUM = (
     "\n\nYou can change session settings mid-conversation with tools (same knobs as "
     "startup flags): set_reasoning_level, set_web_tools, set_show_reasoning, set_stats, "
-    "set_tts, set_vad_mode, set_browser_engine, set_browser_headed, set_generation. "
-    "Use them when the user asks to change how you think, speak, listen, browse, or sample."
+    "set_tts, set_tts_model, set_stt_model, set_vad_mode, set_browser_engine, "
+    "set_browser_headed, set_generation. "
+    "Use them when the user asks to change how you think, speak, listen, browse, or sample. "
+    "For advanced testing without restart: set_stt_model switches Whisper size; "
+    "set_tts_model loads a different mlx-audio TTS model id (slow first load)."
 )
 
 _WEB_PROMPT_ADDENDUM = (
@@ -216,6 +227,10 @@ class MLXLanguageModelService:
             registry.register(make_set_stats_tool(set_stats))
         if (set_tts := self.session_control.get("set_tts")) is not None:
             registry.register(make_set_tts_tool(set_tts))
+        if (set_tts_model := self.session_control.get("set_tts_model")) is not None:
+            registry.register(make_set_tts_model_tool(set_tts_model))
+        if (set_stt_model := self.session_control.get("set_stt_model")) is not None:
+            registry.register(make_set_stt_model_tool(set_stt_model))
         if (set_vad := self.session_control.get("set_vad_mode")) is not None:
             registry.register(make_set_vad_mode_tool(set_vad))
 
@@ -357,7 +372,21 @@ class MLXLanguageModelService:
         else:
             self.chat_history[session_id] = history
 
-    def _stream_tokens(self, prompt_tokens: list[int], max_tokens: int) -> tuple[list[int], str | None]:
+    def _stream_tokens(
+        self,
+        prompt_tokens: list[int],
+        max_tokens: int,
+        *,
+        on_final_text: Callable[[str], None] | None = None,
+        status_message: str = "Generating response...",
+    ) -> tuple[list[int], str | None]:
+        """Generate tokens, optionally notifying as final-channel text grows.
+
+        Args:
+            on_final_text: Called with the cumulative final-channel content whenever
+                it changes (streaming path). Tool-call generations typically never
+                enter the final channel until after tools finish.
+        """
         sampler = self._make_sampler(
             temp=self.config.temperature,
             top_p=self.config.top_p,
@@ -369,7 +398,20 @@ class MLXLanguageModelService:
 
         generated_tokens: list[int] = []
         finish_reason: str | None = None
-        with self.console.status("Generating response...", spinner="dots"):
+        live_parser: StreamableParser | None = None
+        last_final = ""
+        if on_final_text is not None:
+            live_parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
+
+        # When streaming speech via on_final_text, the sink may start a Rich Live
+        # playback display. Nested Live (status spinner + waveform) raises LiveError
+        # and silently drops TTS — so never hold console.status across sink calls.
+        use_status = on_final_text is None
+        status_cm = self.console.status(status_message, spinner="dots") if use_status else nullcontext()
+        if not use_status:
+            self.console.print(f"[dim]{status_message}[/dim]")
+
+        with status_cm:
             for response in self.stream_generate(
                 self.model,
                 self.tokenizer,
@@ -381,7 +423,50 @@ class MLXLanguageModelService:
                 generated_tokens.append(response.token)
                 if response.finish_reason is not None:
                     finish_reason = response.finish_reason
+                if live_parser is not None and on_final_text is not None:
+                    live_parser.process(response.token)
+                    if live_parser.current_channel == "final":
+                        content = live_parser.current_content or ""
+                        if content != last_final:
+                            last_final = content
+                            on_final_text(content)
         return generated_tokens, finish_reason
+
+    def _emit_spoken_progress(
+        self,
+        full_final: str,
+        emitted_end: int,
+        sink: SpokenSentenceSink,
+    ) -> int:
+        """Emit newly completed sentences from final-channel text; return new emit index."""
+        if len(full_final) <= emitted_end:
+            return emitted_end
+        pending = full_final[emitted_end:]
+        sentences, consumed = take_complete_sentences(pending)
+        for sentence in sentences:
+            sink(sentence)
+        if consumed:
+            return emitted_end + consumed
+        return emitted_end
+
+    def _flush_spoken_remainder(self, full_final: str, emitted_end: int, sink: SpokenSentenceSink) -> int:
+        rest = full_final[emitted_end:].strip()
+        if rest:
+            sink(rest)
+            return len(full_final)
+        return emitted_end
+
+    def _emit_spoken_chunks(self, text: str, sink: SpokenSentenceSink) -> None:
+        """Post-hoc chunk a finished answer into spoken pieces."""
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        chunks = chunk_text_for_streaming(cleaned)
+        if not chunks:
+            sink(cleaned)
+            return
+        for chunk in chunks:
+            sink(chunk)
 
     def _parse_response(self, generated_tokens: list[int], debug_mode: bool) -> tuple[str, list[Message]]:
         if debug_mode:
@@ -459,12 +544,16 @@ class MLXLanguageModelService:
         history: list[Message],
         first_call: tuple[Message, str, dict],
         debug_mode: bool,
+        on_spoken_sentence: SpokenSentenceSink | None = None,
     ) -> str:
         """Execute one or more function tools (up to max_tool_rounds) then return spoken text.
 
         Re-reads ``_max_tool_rounds()`` each iteration so mid-turn ``set_web_tools`` can
         raise the browser budget. If the model queues one more tool call exactly when the
         budget is exhausted, that pending call is still dispatched once before finalizing.
+
+        When *on_spoken_sentence* is set, the final answer is streamed into the sink
+        (live during the last follow-up generation when possible).
         """
         user_message = Message.from_role_and_content(Role.USER, text)
         exchange: list[Message] = [user_message]
@@ -475,7 +564,10 @@ class MLXLanguageModelService:
         rounds_used = 0
         pending = True
 
-        def _dispatch_and_followup() -> tuple[str, tuple[Message, str, dict] | None]:
+        def _dispatch_and_followup(
+            *,
+            stream_final: bool = False,
+        ) -> tuple[str, tuple[Message, str, dict] | None]:
             nonlocal last_tool_name, last_result, last_args, call_msg, tool_name, args
             result = self.tool_registry.dispatch(tool_name, args)
             last_tool_name, last_result, last_args = tool_name, result, args
@@ -490,12 +582,32 @@ class MLXLanguageModelService:
             followup_messages = self._build_prompt_messages(history, exchange)
             conversation = Conversation.from_messages(followup_messages)
             prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
-            followup_tokens, _ = self._stream_tokens(prompt_tokens, self.config.max_tokens)
+
+            emitted_end = 0
+
+            def on_final(content: str) -> None:
+                nonlocal emitted_end
+                if on_spoken_sentence is None or not stream_final:
+                    return
+                emitted_end = self._emit_spoken_progress(content, emitted_end, on_spoken_sentence)
+
+            followup_tokens, _ = self._stream_tokens(
+                prompt_tokens,
+                self.config.max_tokens,
+                on_final_text=on_final if (stream_final and on_spoken_sentence) else None,
+                status_message="Working on it...",
+            )
             clean_response, parsed_messages = self._parse_response(followup_tokens, debug_mode)
-            return clean_response, self._extract_function_tool_call(parsed_messages)
+            next_call = self._extract_function_tool_call(parsed_messages)
+            if stream_final and on_spoken_sentence is not None and next_call is None and clean_response:
+                self._flush_spoken_remainder(clean_response, emitted_end, on_spoken_sentence)
+            return clean_response, next_call
 
         while pending and rounds_used < self._max_tool_rounds():
-            clean_response, next_call = _dispatch_and_followup()
+            # Only stream speech on a follow-up that might be the final answer:
+            # we stream every follow-up; if another tool call appears, speech
+            # may have started early (rare). Prefer silence until final.
+            clean_response, next_call = _dispatch_and_followup(stream_final=False)
             rounds_used += 1
 
             if next_call is not None:
@@ -506,20 +618,26 @@ class MLXLanguageModelService:
             pending = False
             if not clean_response:
                 clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+            if on_spoken_sentence is not None:
+                self._emit_spoken_chunks(clean_response, on_spoken_sentence)
             exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
             self._record_turn(session_id, history, exchange)
             return clean_response
 
         # Budget exhausted with a tool call still queued — run that pending call once.
         if pending:
-            clean_response, _ = _dispatch_and_followup()
+            clean_response, _ = _dispatch_and_followup(stream_final=False)
             if not clean_response:
                 clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+            if on_spoken_sentence is not None:
+                self._emit_spoken_chunks(clean_response, on_spoken_sentence)
             exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
             self._record_turn(session_id, history, exchange)
             return clean_response
 
         clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+        if on_spoken_sentence is not None:
+            self._emit_spoken_chunks(clean_response, on_spoken_sentence)
         exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
         self._record_turn(session_id, history, exchange)
         return clean_response
@@ -530,8 +648,16 @@ class MLXLanguageModelService:
         session_id: str = "default",
         audio_array: np.ndarray | None = None,
         sample_rate: int | None = None,
+        on_spoken_sentence: SpokenSentenceSink | None = None,
     ) -> str:
-        """Generate a response to the input text and/or audio."""
+        """Generate a response to the input text and/or audio.
+
+        Args:
+            on_spoken_sentence: Optional callback invoked with each complete spoken
+                sentence from the final channel as soon as it is available (direct
+                answers) or after tools finish (tool path). Used to start TTS before
+                the full answer exists.
+        """
         history = self._get_session_history(session_id)
 
         audio_files = []
@@ -558,7 +684,21 @@ class MLXLanguageModelService:
         prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
         debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
 
-        generated_tokens, finish_reason = self._stream_tokens(prompt_tokens, self.config.max_tokens)
+        # Live final-channel speech: gpt-oss tool calls live on the commentary
+        # channel, so final-channel sentences are safe to speak as they complete.
+        emitted_end = 0
+
+        def on_final(content: str) -> None:
+            nonlocal emitted_end
+            if on_spoken_sentence is None:
+                return
+            emitted_end = self._emit_spoken_progress(content, emitted_end, on_spoken_sentence)
+
+        generated_tokens, finish_reason = self._stream_tokens(
+            prompt_tokens,
+            self.config.max_tokens,
+            on_final_text=on_final if on_spoken_sentence else None,
+        )
 
         for audio_file in audio_files:
             try:
@@ -570,7 +710,16 @@ class MLXLanguageModelService:
 
         tool_call = self._extract_function_tool_call(parsed_messages)
         if tool_call is not None:
-            clean_response = self._run_tool_loop(text, session_id, history, tool_call, debug_mode)
+            # Tool path: final speech comes after tools (any accidental pre-tool
+            # final text was already emitted above — rare for gpt-oss).
+            clean_response = self._run_tool_loop(
+                text,
+                session_id,
+                history,
+                tool_call,
+                debug_mode,
+                on_spoken_sentence=on_spoken_sentence,
+            )
             print_assistant_utterance(self.console, clean_response)
             return clean_response
 
@@ -580,8 +729,17 @@ class MLXLanguageModelService:
                 f"[yellow]Generation hit the {self.config.max_tokens}-token limit before "
                 f"producing an answer. Retrying with up to {retry_max_tokens} tokens...[/yellow]"
             )
-            generated_tokens, _ = self._stream_tokens(prompt_tokens, retry_max_tokens)
+            emitted_end = 0
+
+            generated_tokens, _ = self._stream_tokens(
+                prompt_tokens,
+                retry_max_tokens,
+                on_final_text=on_final if on_spoken_sentence else None,
+            )
             clean_response, _ = self._parse_response(generated_tokens, debug_mode)
+
+        if on_spoken_sentence is not None and clean_response:
+            self._flush_spoken_remainder(clean_response, emitted_end, on_spoken_sentence)
 
         if clean_response:
             self._record_turn(
@@ -595,6 +753,8 @@ class MLXLanguageModelService:
         else:
             self.console.print("[yellow]No usable response generated; skipping history for this turn.[/yellow]")
             clean_response = "I'm sorry, I couldn't produce a response."
+            if on_spoken_sentence is not None:
+                on_spoken_sentence(clean_response)
 
         print_assistant_utterance(self.console, clean_response)
         return clean_response
