@@ -1,6 +1,6 @@
 # Test Catalog — LocalTalk Unit Test Suite
 
-> **186 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
+> **192 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
 >
 > Counts include parametrized cases. Coverage values below come from `uv run pytest --cov-report=term-missing`.
 
@@ -9,7 +9,7 @@
 - [Shared fixtures](#shared-fixtures-testsconftestpy)
 - [Configuration models — 19 tests](#configuration-models--19-tests)
 - [MLX compatibility — 8 tests](#mlx-compatibility--8-tests)
-- [CLI — 34 tests](#cli--34-tests)
+- [CLI — 40 tests](#cli--40-tests)
 - [Audio service — 12 tests](#audio-service--12-tests)
 - [Waveform and automatic VAD — 23 tests](#waveform-and-automatic-vad--23-tests)
 - [Whisper speech recognition — 11 tests](#whisper-speech-recognition--11-tests)
@@ -68,7 +68,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_patch_when_mlx_lm_absent` | Swallows the optional dependency import failure. | LocalTalk modules remain importable without MLX LM. |
 | `test_patch_creates_callable_alias` | The generated alias is callable and behaves like `save_model`. | Verifies functional compatibility, not just attribute presence. |
 
-## CLI — 34 tests
+## CLI — 40 tests
 
 **File:** `tests/unit/test_cli.py`
 
@@ -88,6 +88,10 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_show_reasoning_flag` | `--show-reasoning` enables reasoning display. | Makes the opt-in behavior reachable from the CLI. |
 | `test_show_reasoning_default_false` | Reasoning display defaults off. | Protects internal reasoning by default. |
 | `test_numeric_args` | Parses temperature, token limit, and top-p with correct values. | Generation tuning must reach typed config fields. |
+| `test_reasoning_choices` (3 cases) | Accepts `low`, `medium`, and `high`. | Exposes every supported reasoning effort. |
+| `test_invalid_reasoning_exits` | Rejects an unknown reasoning level. | Fails early on invalid effort. |
+| `test_main_maps_reasoning_effort` | Maps `--reasoning` into `MLXLMConfig`. | Ensures the flag actually reaches the model config. |
+| `test_main_reasoning_defaults_to_medium` | No flag yields medium effort. | Locks in the balanced quality/latency default. |
 | `test_system_prompt_inline` | Parses an inline prompt. | Supports quick personality/instruction overrides. |
 | `test_system_prompt_file_flag` | Parses a prompt-file path. | Supports longer reusable prompts. |
 | `TestMain.test_main_creates_and_runs_assistant` | Constructs and runs `VoiceAssistant`. | Covers the normal CLI entry path. |
@@ -290,11 +294,11 @@ The generation test stubs use `_make_sampler` and `_make_logits_processors`, mat
 |---|---:|---|---:|
 | `tests/unit/test_config.py` | 19 | `models/config.py` | 100% |
 | `tests/unit/test_mlx_compat.py` | 8 | `utils/mlx_compat.py` | 100% |
-| `tests/unit/test_cli.py` | 34 | `cli.py` | 93% |
+| `tests/unit/test_cli.py` | 40 | `cli.py` | 93% |
 | `tests/unit/test_audio.py` | 12 | `services/audio.py` | 29% |
 | `tests/unit/test_audio_vad_auto.py` | 23 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
 | `tests/unit/test_speech_recognition.py` | 11 | `services/speech_recognition.py` | 67% |
 | `tests/unit/test_mlx_tts.py` | 9 | `services/mlx_tts.py` | 69% |
 | `tests/unit/test_mlx_llm.py` | 34 | `services/mlx_llm.py` | 76% |
 | `tests/unit/test_assistant.py` | 36 | `core/assistant.py` | 46% |
-| **Total** | **186** | | **64% overall** |
+| **Total** | **192** | | **64% overall** |

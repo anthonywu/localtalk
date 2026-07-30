@@ -7,7 +7,7 @@ import os
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 from localtalk.core.assistant import VoiceAssistant  # noqa: E402
-from localtalk.models.config import AppConfig  # noqa: E402
+from localtalk.models.config import AppConfig, ReasoningLevel  # noqa: E402
 
 
 def parse_args():
@@ -60,6 +60,13 @@ def parse_args():
         type=int,
         default=512,
         help="Maximum tokens to generate (default: 512; reasoning models need headroom for analysis before the answer)",
+    )
+    parser.add_argument(
+        "--reasoning",
+        type=str,
+        default="medium",
+        choices=["low", "medium", "high"],
+        help="Reasoning effort for gpt-oss (default: medium). Low is fastest, high is most thorough but adds noticeable latency for voice conversation",
     )
 
     # System prompt
@@ -160,6 +167,7 @@ def main():
     config.mlx_lm.temperature = args.temperature
     config.mlx_lm.top_p = args.top_p
     config.mlx_lm.max_tokens = args.max_tokens
+    config.mlx_lm.reasoning_effort = ReasoningLevel(args.reasoning)
     config.whisper.model_size = args.whisper_model
 
     # Update system prompt - prioritize --system-prompt-file over --system-prompt over default file

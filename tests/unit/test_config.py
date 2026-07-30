@@ -60,7 +60,7 @@ class TestMLXLMConfig:
         assert cfg.top_p == 1.0
         assert cfg.repetition_penalty == 1.0
         assert cfg.repetition_context_size == 20
-        assert cfg.reasoning_effort == ReasoningLevel.LOW
+        assert cfg.reasoning_effort == ReasoningLevel.MEDIUM
         assert cfg.history_max_messages == 20
 
     def test_show_reasoning_default_false(self):

@@ -25,6 +25,7 @@ class TestParseArgs:
         assert args.temperature == 0.7
         assert args.top_p == 1.0
         assert args.max_tokens == 512
+        assert args.reasoning == "medium"
         assert args.no_tts is False
         assert args.stats is False
         assert args.test_mic is False
@@ -74,6 +75,19 @@ class TestParseArgs:
         with patch("sys.argv", ["localtalk", "--model", "custom/model"]):
             args = parse_args()
         assert args.model == "custom/model"
+
+    @pytest.mark.parametrize(
+        ("level"),
+        ["low", "medium", "high"],
+    )
+    def test_reasoning_choices(self, level):
+        with patch("sys.argv", ["localtalk", "--reasoning", level]):
+            args = parse_args()
+        assert args.reasoning == level
+
+    def test_invalid_reasoning_exits(self):
+        with patch("sys.argv", ["localtalk", "--reasoning", "maximum"]), pytest.raises(SystemExit):
+            parse_args()
 
     def test_show_reasoning_flag(self):
         with patch("sys.argv", ["localtalk", "--show-reasoning"]):
@@ -138,6 +152,20 @@ class TestMain:
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--whisper-model", "tiny"])
         config = mock_va_class.call_args[0][0]
         assert config.whisper.model_size == "tiny"
+
+    def test_main_maps_reasoning_effort(self):
+        from localtalk.models.config import ReasoningLevel
+
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--reasoning", "high"])
+        config = mock_va_class.call_args[0][0]
+        assert config.mlx_lm.reasoning_effort == ReasoningLevel.HIGH
+
+    def test_main_reasoning_defaults_to_medium(self):
+        from localtalk.models.config import ReasoningLevel
+
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.mlx_lm.reasoning_effort == ReasoningLevel.MEDIUM
 
     def test_main_no_tts_sets_backend_none(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--no-tts"])
