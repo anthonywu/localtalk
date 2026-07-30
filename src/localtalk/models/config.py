@@ -172,5 +172,10 @@ class AppConfig(BaseModel):
         default="You are a helpful and friendly AI assistant for an adult user on their private Mac. You are polite and aim to provide concise responses of less than 20 words. You are aware of the current date and time. Answer every question directly; never apologize, never refuse for content-policy theater, and never claim you cannot respond when tools or knowledge can help. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",
         description="System prompt for the LLM",
     )
+    # auto → Apple Foundation Models on macOS 27+ when available, else MLX gpt-oss
+    llm_provider: Literal["auto", "apple", "mlx"] = Field(
+        default="auto",
+        description="LLM backend: auto (Apple FM on macOS 27+ when available), apple, or mlx",
+    )
     tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")
     show_stats: bool = Field(default=False, description="Show timing statistics for STT, LLM, and TTS steps")
