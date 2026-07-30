@@ -25,7 +25,7 @@ class TestParseArgs:
         assert args.temperature == 0.7
         assert args.top_p == 1.0
         assert args.max_tokens == 512
-        assert args.reasoning == "medium"
+        assert args.reasoning == "low"
         assert args.no_tts is False
         assert args.stats is False
         assert args.test_mic is False
@@ -160,12 +160,12 @@ class TestMain:
         config = mock_va_class.call_args[0][0]
         assert config.mlx_lm.reasoning_effort == ReasoningLevel.HIGH
 
-    def test_main_reasoning_defaults_to_medium(self):
+    def test_main_reasoning_defaults_to_low(self):
         from localtalk.models.config import ReasoningLevel
 
         mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
         config = mock_va_class.call_args[0][0]
-        assert config.mlx_lm.reasoning_effort == ReasoningLevel.MEDIUM
+        assert config.mlx_lm.reasoning_effort == ReasoningLevel.LOW
 
     def test_main_no_tts_sets_backend_none(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--no-tts"])

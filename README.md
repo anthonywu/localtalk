@@ -196,7 +196,7 @@ localtalk
 - `--temperature FLOAT`: Temperature for text generation (default: 0.7)
 - `--top-p FLOAT`: Top-p sampling parameter (default: 1.0)
 - `--max-tokens INT`: Maximum tokens to generate (default: 512)
-- `--reasoning LEVEL`: Reasoning effort for gpt-oss: `low`, `medium`, or `high` (default: medium). Lower is faster, higher is more thorough but adds noticeable latency for voice conversation
+- `--reasoning LEVEL`: Reasoning effort for gpt-oss: `low`, `medium`, or `high` (default: low, fastest for voice). Higher levels are more thorough but add latency — you can also change the level mid-session by voice
 
 **Voice Activity Detection (VAD) Options:**
 

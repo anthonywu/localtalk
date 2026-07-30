@@ -324,6 +324,12 @@ class VoiceAssistant:
             except Exception:
                 pass
 
+            # Reasoning level + hint that it can be changed by voice mid-session
+            init_messages.append(
+                f"🧠 Reasoning level: {self.config.mlx_lm.reasoning_effort.value} "
+                '(say "think harder" or "think faster" to change it anytime)'
+            )
+
             # Final update with all information
             init_messages.append("\n✅ Ready!")
             live.update(create_panel())
@@ -337,6 +343,7 @@ class VoiceAssistant:
             "✅ No tracking, no telemetry, no cloud APIs",
             "",
             "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            '[dim]💡 TIP: Adjust thinking depth anytime — say "think harder", "think faster", or "use low/medium/high reasoning"[/dim]',
             "[dim]💡 TIP: Disable progress bars with: export TQDM_DISABLE=1[/dim]",
         ]
 

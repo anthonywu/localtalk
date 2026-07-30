@@ -64,9 +64,9 @@ def parse_args():
     parser.add_argument(
         "--reasoning",
         type=str,
-        default="medium",
+        default="low",
         choices=["low", "medium", "high"],
-        help="Reasoning effort for gpt-oss (default: medium). Low is fastest, high is most thorough but adds noticeable latency for voice conversation",
+        help="Reasoning effort for gpt-oss (default: low, fastest for voice). Medium/high are more thorough but add latency; can also be changed mid-session by voice",
     )
 
     # System prompt

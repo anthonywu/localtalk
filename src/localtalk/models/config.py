@@ -38,7 +38,7 @@ class MLXLMConfig(BaseModel):
     repetition_penalty: float = Field(default=1.0, ge=0.1, le=10.0, description="Repetition penalty")
     repetition_context_size: int = Field(default=20, ge=1, description="Context size for repetition penalty")
     reasoning_effort: ReasoningLevel = Field(
-        default=ReasoningLevel.MEDIUM,
+        default=ReasoningLevel.LOW,
         description="Reasoning effort: low, medium, or high (higher improves answer quality but adds latency)",
     )
     show_reasoning: bool = Field(default=False, description="Show analysis/commentary channels in terminal output")

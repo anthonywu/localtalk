@@ -13,7 +13,7 @@
 - Raise default `max_tokens` from 100 to 512: gpt-oss reasons in the Harmony analysis channel before answering, and 100 tokens frequently truncated generation before any final answer existed, surfacing the "I'm sorry, I couldn't produce a response" fallback
 - Default system prompts now instruct the model to answer directly and never apologize or claim it cannot respond
 - Default system prompts now require fully speakable output: abbreviations, acronyms, units, symbols, and numbers must be spelled out in their full spoken form (e.g., `feet` not `ft`) so TTS can narrate every response verbatim
-- Raise default reasoning effort from low to medium and expose it as a `--reasoning` CLI flag: medium improves answer quality on harder questions while staying responsive enough for voice conversation
+- Expose reasoning effort as a `--reasoning {low,medium,high}` CLI flag (default stays `low` for fastest voice responses); the startup panel now shows the current reasoning level and both the startup panel and privacy banner hint that it can be changed by voice mid-session
 
 ### Fixed
 

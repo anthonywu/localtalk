@@ -91,7 +91,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_reasoning_choices` (3 cases) | Accepts `low`, `medium`, and `high`. | Exposes every supported reasoning effort. |
 | `test_invalid_reasoning_exits` | Rejects an unknown reasoning level. | Fails early on invalid effort. |
 | `test_main_maps_reasoning_effort` | Maps `--reasoning` into `MLXLMConfig`. | Ensures the flag actually reaches the model config. |
-| `test_main_reasoning_defaults_to_medium` | No flag yields medium effort. | Locks in the balanced quality/latency default. |
+| `test_main_reasoning_defaults_to_low` | No flag yields low effort. | Locks in the latency-first default for voice. |
 | `test_system_prompt_inline` | Parses an inline prompt. | Supports quick personality/instruction overrides. |
 | `test_system_prompt_file_flag` | Parses a prompt-file path. | Supports longer reusable prompts. |
 | `TestMain.test_main_creates_and_runs_assistant` | Constructs and runs `VoiceAssistant`. | Covers the normal CLI entry path. |
