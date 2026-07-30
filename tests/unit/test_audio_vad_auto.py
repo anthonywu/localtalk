@@ -224,6 +224,20 @@ class TestRecordWithVadAutomaticMocked:
         assert len(result) > 0
         assert result.dtype == np.float32
 
+    def test_leading_silence_is_trimmed_from_delayed_speech(self):
+        """Waiting for delayed speech does not return all preceding silence."""
+        service = self._make_service()
+        leading_silence = [np.zeros(512, dtype=np.float32) for _ in range(100)]
+        speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
+        trailing_silence = [np.zeros(512, dtype=np.float32) for _ in range(64)]
+        chunks = leading_silence + speech_chunks + trailing_silence
+        vad_probs = [0.0] * 100 + [0.9] * 3 + [0.0] * 64
+
+        result = self._run_with_scripted_chunks(service, chunks, vad_probs)
+
+        assert len(result) > 0
+        assert len(result) < len(np.concatenate(chunks)) - len(np.concatenate(leading_silence))
+
     def test_speech_then_silence_below_threshold_does_not_stop(self):
         """Speech followed by silence just below threshold should not stop via silence."""
         service = self._make_service()

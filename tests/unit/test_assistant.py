@@ -330,23 +330,32 @@ class TestProcessVoiceInput:
         assistant._get_text_input = MagicMock(return_value="typed message")
         assistant._process_text_response = MagicMock()
 
-        # Simulate Esc by patching the esc listener to not run
         class FakeThread:
             def __init__(self, **kwargs):
                 self._target = kwargs.get("target")
                 self.daemon = kwargs.get("daemon", False)
 
             def start(self):
-                pass  # Don't actually run the listener
+                self._target()
 
             def join(self, timeout=None):
                 pass
 
-        with patch("localtalk.core.assistant.threading.Thread", FakeThread):
-            # Patch termios/tty so the listener guard doesn't crash
-            with patch("localtalk.core.assistant.termios"), patch("localtalk.core.assistant.tty"):
-                result = assistant.process_voice_input()
+        stdin = MagicMock()
+        stdin.fileno.return_value = 10
+        stdin.isatty.return_value = True
+        with (
+            patch("localtalk.core.assistant.threading.Thread", FakeThread),
+            patch("localtalk.core.assistant.sys.stdin", stdin),
+            patch("localtalk.core.assistant._stdin_has_key", return_value=True),
+            patch("localtalk.core.assistant._read_key_raw", return_value="\x1b"),
+            patch("localtalk.core.assistant.termios") as termios_mock,
+            patch("localtalk.core.assistant.tty") as tty_mock,
+        ):
+            result = assistant.process_voice_input()
 
-        # Since user_pressed_esc is not set (listener didn't run),
-        # this falls through to the no-speech path
         assert result is True
+        tty_mock.setcbreak.assert_called_once_with(10)
+        tty_mock.setraw.assert_not_called()
+        termios_mock.tcsetattr.assert_called_once()
+        assistant._process_text_response.assert_called_once_with("typed message")

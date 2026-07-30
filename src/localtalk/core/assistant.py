@@ -292,6 +292,9 @@ class VoiceAssistant:
             init_messages.append("🎤 Initializing audio service...")
             live.update(create_panel())
             self.audio = AudioService(self.config.audio, quiet_console)
+            # Initialization messages stay quiet, but recording status and the
+            # live microphone waveform must render to the interactive console.
+            self.audio.console = self.console
 
             # Check VAD status
             if self.config.audio.use_vad:
@@ -471,7 +474,9 @@ class VoiceAssistant:
                         return
                     old_settings = termios.tcgetattr(fd)
                     try:
-                        tty.setraw(fd)
+                        # Keep terminal output processing enabled so Rich Live can
+                        # redraw in place while input remains character-at-a-time.
+                        tty.setcbreak(fd)
                         while not esc_pressed.is_set():
                             if _stdin_has_key(timeout=0.1):
                                 key = _read_key_raw()

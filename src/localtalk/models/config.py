@@ -71,7 +71,9 @@ class AudioConfig(BaseModel):
         default=2.0, ge=0.05, description="Seconds of silence after speech before stopping recording"
     )
     vad_max_recording_seconds: int = Field(default=120, ge=1, description="Maximum recording duration in seconds")
-    vad_initial_wait_seconds: float = Field(default=6.0, ge=0.0, description="Initial wait before timeout if no speech")
+    vad_initial_wait_seconds: float = Field(
+        default=15.0, ge=0.0, description="Initial wait before timeout if no speech"
+    )
 
     @model_validator(mode="after")
     def _validate_vad_constraints(self) -> AudioConfig:
