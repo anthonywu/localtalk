@@ -533,6 +533,7 @@ class TestReasoningToolCalls:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded"
+        service.knowledge_store = MagicMock()
         return service
 
     @staticmethod
@@ -556,7 +557,7 @@ class TestReasoningToolCalls:
         return conv_mock
 
     @staticmethod
-    def _tool_call_msg(args: dict):
+    def _tool_call_msg(args: dict, tool_name: str = "set_reasoning_level"):
         import json
 
         from openai_harmony import Message, Role
@@ -564,7 +565,7 @@ class TestReasoningToolCalls:
         return (
             Message.from_role_and_content(Role.ASSISTANT, json.dumps(args))
             .with_channel("commentary")
-            .with_recipient("functions.set_reasoning_level")
+            .with_recipient(f"functions.{tool_name}")
         )
 
     @staticmethod
@@ -656,10 +657,11 @@ class TestReasoningToolCalls:
         rendered_msgs = conv_mock.call_args[0][0]
         assert rendered_msgs[0].author.role == Role.SYSTEM
         assert rendered_msgs[1].author.role == Role.DEVELOPER
-        # The reasoning tool is registered in the developer message
+        # Reasoning + knowledge tools are registered in the developer message
         dev_dump = rendered_msgs[1].content[0].model_dump()
         tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
         assert "set_reasoning_level" in tool_names
+        assert "acquire_knowledge" in tool_names
         # History follows the system/developer messages
         assert rendered_msgs[2].author.role == Role.USER
 
@@ -677,3 +679,86 @@ class TestReasoningToolCalls:
         assert service.reasoning_effort == ReasoningEffort.LOW
         assert service.stream_generate.call_count == 1
         assert len(service.chat_history["default"]) == 2
+
+
+class TestAcquireKnowledgeToolCalls:
+    """Offline knowledge pack downloads via the acquire_knowledge harmony tool."""
+
+    def _make_service(self):
+        return TestReasoningToolCalls()._make_service()
+
+    def test_acquire_knowledge_downloads_default_pack(self, monkeypatch, capsys):
+        from openai_harmony import Role
+
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {
+            "ok": True,
+            "already_installed": False,
+            "pack_id": "wikipedia_en_simple_all_nopic",
+            "title": "Simple English Wikipedia",
+            "path": "/tmp/cache/pack.zim",
+            "message": "Downloaded Simple English Wikipedia into the local cache.",
+        }
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [TestReasoningToolCalls._tool_call_msg({}, tool_name="acquire_knowledge")],
+                [TestReasoningToolCalls._final_msg("Downloaded Simple English Wikipedia for you.")],
+            ],
+        )
+
+        result = service.generate_response("download offline wikipedia")
+
+        assert result == "Downloaded Simple English Wikipedia for you."
+        service.knowledge_store.acquire.assert_called_once_with(None)
+        history = service.chat_history["default"]
+        assert history[1].recipient == "functions.acquire_knowledge"
+        assert history[2].author.role == Role.TOOL
+        assert "Acquiring knowledge pack" in capsys.readouterr().out
+
+    def test_acquire_knowledge_list_pack(self, monkeypatch):
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {
+            "ok": True,
+            "packs": [{"id": "wikipedia_en_simple_all_nopic", "title": "Simple English Wikipedia", "installed": False}],
+            "default_pack": "wikipedia_en_simple_all_nopic",
+        }
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [TestReasoningToolCalls._tool_call_msg({"pack": "list"}, tool_name="acquire_knowledge")],
+                [],
+            ],
+        )
+
+        result = service.generate_response("what knowledge packs can I install?")
+
+        service.knowledge_store.acquire.assert_called_once_with("list")
+        assert "Simple English Wikipedia" in result
+
+    def test_acquire_knowledge_failure_fallback(self, monkeypatch):
+        service = self._make_service()
+        service.knowledge_store.acquire.return_value = {"ok": False, "error": "network down"}
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"pack": "wiktionary_en_simple_all_nopic"},
+                        tool_name="acquire_knowledge",
+                    )
+                ],
+                [],
+            ],
+        )
+
+        result = service.generate_response("download the dictionary")
+
+        assert result == "Sorry, I couldn't download that knowledge pack."
+        service.knowledge_store.acquire.assert_called_once_with("wiktionary_en_simple_all_nopic")

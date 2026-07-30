@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Offline knowledge acquisition via Harmony tool calling: the assistant exposes an `acquire_knowledge` tool that downloads Kiwix ZIM packs into `~/.cache/localtalk/knowledge` (default: Simple English Wikipedia without pictures; also Best of Wikipedia, Simple Wiktionary, and Physics)
+
 ### Changed
 
 - Bump build backend requirement to `uv_build>=0.12.0,<0.13.0` (matches uv 0.12.0) and document the single-command `uv publish` release workflow using `uv auth login` stored credentials

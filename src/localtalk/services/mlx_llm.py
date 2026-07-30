@@ -23,6 +23,8 @@ from openai_harmony import (
 )
 from rich.console import Console
 
+from localtalk.knowledge.packs import DEFAULT_PACK_ID, pack_ids
+from localtalk.knowledge.store import KnowledgeStore, get_default_store
 from localtalk.models.config import MLXLMConfig, ReasoningLevel
 
 _REASONING_MAP: dict[ReasoningLevel, ReasoningEffort] = {
@@ -32,7 +34,6 @@ _REASONING_MAP: dict[ReasoningLevel, ReasoningEffort] = {
 }
 
 _REASONING_TOOL_NAME = "set_reasoning_level"
-_REASONING_TOOL_RECIPIENT = f"functions.{_REASONING_TOOL_NAME}"
 _REASONING_TOOL = ToolDescription.new(
     _REASONING_TOOL_NAME,
     (
@@ -57,16 +58,60 @@ _REASONING_TOOL = ToolDescription.new(
     },
 )
 
+_ACQUIRE_KNOWLEDGE_TOOL_NAME = "acquire_knowledge"
+_ACQUIRE_KNOWLEDGE_PACK_ENUM = ["list", *pack_ids()]
+_ACQUIRE_KNOWLEDGE_TOOL = ToolDescription.new(
+    _ACQUIRE_KNOWLEDGE_TOOL_NAME,
+    (
+        "Download an offline knowledge pack into the user's home cache so LocalTalk "
+        "can use world knowledge without the internet (airplane mode). Call this when "
+        "the user asks to download Wikipedia, get offline knowledge, install a "
+        "knowledge base, or similar. "
+        f"Default pack is {DEFAULT_PACK_ID} (Simple English Wikipedia without "
+        "pictures, about 1 gigabyte) — recommend this first. Other packs: "
+        "wikipedia_en_top_nopic (Best of English Wikipedia, about 2 gigabytes), "
+        "wiktionary_en_simple_all_nopic (Simple English dictionary, about 25 "
+        "megabytes), wikipedia_en_physics_nopic (physics articles, about 300 "
+        "megabytes). Pass pack='list' to list available packs and what is already "
+        "installed. Packs are stored under ~/.cache/localtalk/knowledge and kept "
+        "for future sessions."
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "pack": {
+                "type": "string",
+                "enum": _ACQUIRE_KNOWLEDGE_PACK_ENUM,
+                "description": (
+                    f"Pack to download, or 'list' to show options. "
+                    f"Omit or use {DEFAULT_PACK_ID} for the recommended default."
+                ),
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+)
+
+_FUNCTION_TOOLS = [_REASONING_TOOL, _ACQUIRE_KNOWLEDGE_TOOL]
+
 
 class MLXLanguageModelService:
     """Service for generating responses using MLX-LM with audio support."""
 
-    def __init__(self, config: MLXLMConfig, system_prompt: str, console: Console | None = None):
+    def __init__(
+        self,
+        config: MLXLMConfig,
+        system_prompt: str,
+        console: Console | None = None,
+        knowledge_store: KnowledgeStore | None = None,
+    ):
         self.config = config
         self.system_prompt = system_prompt
         self.console = console or Console()
         self.chat_history: dict[str, list[Message]] = {}
         self.reasoning_effort = _REASONING_MAP[config.reasoning_effort]
+        self.knowledge_store = knowledge_store or get_default_store(console=self.console)
         self._load_model()
         self._init_harmony()
 
@@ -186,7 +231,7 @@ class MLXLanguageModelService:
         """
         sys_content = SystemContent.new().with_reasoning_effort(self.reasoning_effort)
         dev_content = (
-            DeveloperContent.new().with_instructions(self.system_prompt).with_function_tools([_REASONING_TOOL])
+            DeveloperContent.new().with_instructions(self.system_prompt).with_function_tools(_FUNCTION_TOOLS)
         )
         return [
             Message.from_role_and_content(Role.SYSTEM, sys_content),
@@ -302,15 +347,17 @@ class MLXLanguageModelService:
 
         return clean_response, parsed_messages
 
-    def _extract_reasoning_tool_call(self, parsed_messages: list[Message]) -> tuple[Message, dict] | None:
-        """Find a set_reasoning_level tool call in parsed messages, if any.
+    def _extract_function_tool_call(self, parsed_messages: list[Message]) -> tuple[Message, str, dict] | None:
+        """Find a functions.* tool call in parsed messages, if any.
 
         Tool calls arrive on the commentary channel addressed to
-        "functions.set_reasoning_level", with JSON arguments as content.
+        ``functions.<name>``, with JSON arguments as content.
         """
         for msg in reversed(parsed_messages):
-            if msg.recipient != _REASONING_TOOL_RECIPIENT:
+            recipient = msg.recipient or ""
+            if not recipient.startswith("functions."):
                 continue
+            tool_name = recipient.removeprefix("functions.")
             args_text = ""
             for content in msg.content:
                 if hasattr(content, "text"):
@@ -322,43 +369,86 @@ class MLXLanguageModelService:
                 args = {}
             if not isinstance(args, dict):
                 args = {}
-            return msg, args
+            return msg, tool_name, args
         return None
 
-    def _handle_reasoning_tool_call(
+    def _execute_tool(self, tool_name: str, args: dict) -> dict:
+        """Run a registered function tool and return a JSON-serializable result."""
+        if tool_name == _REASONING_TOOL_NAME:
+            level = str(args.get("level", "")).lower()
+            valid_levels = {member.value for member in ReasoningLevel}
+            if level in valid_levels:
+                self.reasoning_effort = _REASONING_MAP[ReasoningLevel(level)]
+                self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
+                return {"ok": True, "reasoning_effort": level}
+            return {
+                "ok": False,
+                "error": f"invalid reasoning level {level!r}; expected low, medium, or high",
+            }
+
+        if tool_name == _ACQUIRE_KNOWLEDGE_TOOL_NAME:
+            pack = args.get("pack")
+            pack_id = None if pack is None else str(pack)
+            self.console.print(
+                f"[cyan]Acquiring knowledge pack: {pack_id or DEFAULT_PACK_ID}[/cyan]"
+            )
+            return self.knowledge_store.acquire(pack_id)
+
+        return {"ok": False, "error": f"unknown tool {tool_name!r}"}
+
+    def _spoken_tool_fallback(self, tool_name: str, result: dict, args: dict) -> str:
+        """Speak a confirmation when the model produces no final channel text."""
+        if tool_name == _REASONING_TOOL_NAME:
+            if result.get("ok"):
+                return f"Okay, I've set my reasoning level to {result.get('reasoning_effort')}."
+            return "Sorry, I couldn't change the reasoning level."
+
+        if tool_name == _ACQUIRE_KNOWLEDGE_TOOL_NAME:
+            if args.get("pack") == "list" or result.get("packs") is not None:
+                installed = [p["title"] for p in result.get("packs", []) if p.get("installed")]
+                if installed:
+                    return (
+                        "Here are the offline knowledge packs I can download. "
+                        f"Already installed: {', '.join(installed)}. "
+                        "The recommended default is Simple English Wikipedia."
+                    )
+                return (
+                    "Here are the offline knowledge packs I can download. "
+                    "I recommend starting with Simple English Wikipedia, about one gigabyte."
+                )
+            if result.get("ok"):
+                title = result.get("title") or "that knowledge pack"
+                if result.get("already_installed"):
+                    return f"{title} is already downloaded and ready in your local cache."
+                return f"Okay, I've downloaded {title} into your local cache."
+            return "Sorry, I couldn't download that knowledge pack."
+
+        return "Sorry, I couldn't complete that tool request."
+
+    def _handle_tool_call(
         self,
         call_msg: Message,
+        tool_name: str,
         args: dict,
         text: str,
         session_id: str,
         history: list[Message],
         debug_mode: bool,
     ) -> str:
-        """Execute a reasoning-level tool call and generate a spoken confirmation.
+        """Execute a function tool call and generate a spoken confirmation.
 
-        Updates the reasoning effort going forward, feeds the tool result back
-        to the model so it can confirm naturally, and records the whole
-        exchange (user message, tool call, tool result, confirmation) in history.
+        Feeds the tool result back to the model so it can confirm naturally,
+        and records the whole exchange in history.
         """
-        level = str(args.get("level", "")).lower()
-        valid_levels = {member.value for member in ReasoningLevel}
-        if level in valid_levels:
-            self.reasoning_effort = _REASONING_MAP[ReasoningLevel(level)]
-            result = {"ok": True, "reasoning_effort": level}
-            self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
-        else:
-            result = {"ok": False, "error": f"invalid reasoning level {level!r}; expected low, medium, or high"}
-
-        # Tool results are authored by the tool and addressed back to the assistant
+        result = self._execute_tool(tool_name, args)
+        recipient = f"functions.{tool_name}"
         tool_response = (
-            Message.from_author_and_content(Author.new(Role.TOOL, _REASONING_TOOL_RECIPIENT), json.dumps(result))
+            Message.from_author_and_content(Author.new(Role.TOOL, recipient), json.dumps(result))
             .with_channel("commentary")
             .with_recipient("assistant")
         )
         user_message = Message.from_role_and_content(Role.USER, text)
 
-        # Re-render (with the NEW reasoning effort in the system message) so the
-        # model sees its tool result and can confirm the change to the user
         followup_messages = self._build_prompt_messages(history, [user_message, call_msg, tool_response])
         conversation = Conversation.from_messages(followup_messages)
         prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
@@ -367,12 +457,7 @@ class MLXLanguageModelService:
         clean_response, _ = self._parse_response(followup_tokens, debug_mode)
 
         if not clean_response:
-            # The model gave no spoken confirmation; speak one on its behalf so
-            # the user still gets feedback (and history stays coherent).
-            if result["ok"]:
-                clean_response = f"Okay, I've set my reasoning level to {level}."
-            else:
-                clean_response = "Sorry, I couldn't change the reasoning level."
+            clean_response = self._spoken_tool_fallback(tool_name, result, args)
 
         self._record_turn(
             session_id,
@@ -457,13 +542,13 @@ class MLXLanguageModelService:
 
         clean_response, parsed_messages = self._parse_response(generated_tokens, debug_mode)
 
-        # Mid-session reasoning control: the model can adjust its own reasoning
-        # effort by calling the set_reasoning_level tool on the commentary channel.
-        reasoning_call = self._extract_reasoning_tool_call(parsed_messages)
-        if reasoning_call is not None:
-            call_msg, call_args = reasoning_call
-            clean_response = self._handle_reasoning_tool_call(
-                call_msg, call_args, text, session_id, history, debug_mode
+        # Function tools (reasoning control, offline knowledge acquisition, …)
+        # arrive on the commentary channel addressed to functions.<name>.
+        tool_call = self._extract_function_tool_call(parsed_messages)
+        if tool_call is not None:
+            call_msg, tool_name, call_args = tool_call
+            clean_response = self._handle_tool_call(
+                call_msg, tool_name, call_args, text, session_id, history, debug_mode
             )
             self.console.print(f"[cyan]Assistant: {clean_response}")
             return clean_response

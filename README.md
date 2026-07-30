@@ -40,6 +40,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
 - 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
+- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge` for airplane-mode world knowledge
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
 - 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
@@ -377,14 +378,22 @@ Currently, LocalTalk supports English (American and British accents). **Chinese 
 
 ### Offline Knowledge Base
 
-We're planning to add support for **offline data sources** to augment the LLM's knowledge while maintaining complete privacy:
+LocalTalk can download **offline knowledge packs** (Kiwix ZIM archives) into your home cache and keep them for future sessions:
 
-- **Offline Wikipedia**: Full-text search and retrieval from Wikipedia dumps
-- **Personal Documents**: Index and query your own documents, notes, and PDFs
-- **Technical Documentation**: Offline access to programming docs, manuals, and references
-- **Custom Knowledge Bases**: Import and index any structured data source
+```text
+~/.cache/localtalk/knowledge/
+```
 
-This will enable LocalTalk to provide informed responses about current events, technical topics, and personal information - all while keeping everything local and private on your device. The RAG (Retrieval Augmented Generation) pipeline will seamlessly integrate with the voice interface.
+Ask by voice, for example: “download offline Wikipedia” or “what knowledge packs can I install?” The assistant calls the `acquire_knowledge` Harmony tool.
+
+| Pack id | What it is | Approx size |
+| --- | --- | --- |
+| `wikipedia_en_simple_all_nopic` (**default**) | Simple English Wikipedia, no pictures | ~1 GB |
+| `wikipedia_en_top_nopic` | Best of English Wikipedia, no pictures | ~2 GB |
+| `wiktionary_en_simple_all_nopic` | Simple English Wiktionary | ~25 MB |
+| `wikipedia_en_physics_nopic` | Physics article selection | ~300 MB |
+
+Packs are resolved from the live Kiwix catalog at download time, then cached permanently under the path above (honors `XDG_CACHE_HOME` if set). Querying the installed archives for answers (RAG / ZIM search) is planned next.
 
 ### Other Planned Features
 
