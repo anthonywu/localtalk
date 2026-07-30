@@ -2,12 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Sentence-streamed speech**: final-channel text is spoken sentence-by-sentence as the LLM produces it (time-to-first-audio tracks first sentence + first TTS chunk, not the full reply)
+- **Turn metrics** written to `~/.cache/localtalk/metrics/turns.jsonl` (honors `XDG_CACHE_HOME`): STT/LLM/TTS timings, time-to-first-audio, chunk counts, interrupt flag
+- **Earcons**: short listen / heard / speak / error tones for eyes-free feedback
+- **Esc stops playback** mid-reply (remaining sentence chunks are skipped)
+- Streaming text helpers under `utils/text_processing.py` (`take_complete_sentences`, `chunk_text_for_streaming`)
+- **Apple Foundation Models LLM provider** (`--llm-provider auto|apple|mlx`): on macOS 27+ (Golden Gate) when `SystemLanguageModel` is available, `auto` defaults to the on-device Apple model via a small Swift helper (`localtalk-fm`); tools use a JSON `tool_call` host protocol. Force MLX with `--llm-provider mlx` or `LOCALTALK_LLM_PROVIDER=mlx`
+- Mid-session **`set_stt_model`** / **`set_tts_model`** tools: hot-swap Whisper size (and optional language) or mlx-audio TTS model id without restarting — for advanced A/B testing
+
 ### Changed
 
 - Online tools default to **auto**: enabled when startup detects internet reachability, off when offline (override with `--enable-web` / `--no-web`)
 - Mid-session `set_web_tools` Harmony tool lets the user say "enable web" / "disable web" without restarting
-- Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (model/whisper still require restart)
+- Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_tts_model`, `set_stt_model`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (LLM base model still requires restart; Whisper/TTS model ids can hot-swap)
 - Browser control defaults to **CDP attach** to the user's running Chrome (`http://127.0.0.1:9222`); falls back to launching Chrome if CDP is down. Use `--no-browser-attach` to force launch-only. Disconnect never quits the user's Chrome.
+- Disable tqdm / HF progress bars by default at process entry so they cannot stomp Rich Live regions
 
 ## [0.6.0] - 2026-07-30
 

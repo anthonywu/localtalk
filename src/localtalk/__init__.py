@@ -18,6 +18,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Disable Hugging Face telemetry for offline privacy
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 # Apply MLX compatibility patches early
 try:
