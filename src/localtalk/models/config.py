@@ -52,6 +52,54 @@ class ChatterBoxConfig(BaseModel):
     silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
 
 
+class WebToolsConfig(BaseModel):
+    """Optional online knowledge tools (off by default)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Register web_search when True (--enable-web; also enables browser_tools)",
+    )
+    max_tool_rounds: int = Field(default=3, ge=1, le=8, description="Max Harmony tool rounds per user turn")
+    search_max_results: int = Field(default=3, ge=1, le=5, description="Default web_search result count")
+    search_timeout_s: float = Field(default=8.0, ge=1.0, le=30.0, description="HTTP timeout for web search")
+    probe_timeout_s: float = Field(default=2.0, ge=0.5, le=10.0, description="Startup/reachability probe timeout")
+    status_ttl_s: float = Field(default=45.0, ge=0.0, description="Cached NetworkStatus TTL in seconds")
+    startup_probe: bool = Field(default=True, description="Probe connectivity during startup")
+    reachability_url: str = Field(
+        default="https://connectivitycheck.gstatic.com/generate_204",
+        description="URL used for L2 reachability probe",
+    )
+    backend: Literal["wikipedia"] = Field(default="wikipedia", description="Web search backend")
+
+
+class BrowserToolsConfig(BaseModel):
+    """Optional Playwright browser tools (off by default).
+
+    Uses the user's installed browsers when possible:
+    - chrome → system Google Chrome via Playwright channel
+    - safari → Playwright WebKit (Safari engine; not Safari.app itself)
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Register browser_* tools when True (set with --enable-web alongside web_tools)",
+    )
+    engine: Literal["chrome", "safari"] = Field(
+        default="chrome",
+        description="Browser engine: chrome (system Chrome) or safari (Playwright WebKit)",
+    )
+    headed: bool = Field(default=False, description="Show browser window (default headless)")
+    max_tool_rounds: int = Field(
+        default=12,
+        ge=1,
+        le=20,
+        description="Max Harmony tool rounds per turn when browser tools are enabled",
+    )
+    navigation_timeout_ms: int = Field(default=20000, ge=1000, le=120000, description="page.goto timeout")
+    snapshot_max_chars: int = Field(default=6000, ge=500, le=20000, description="Max chars for browser_snapshot")
+    extract_max_chars: int = Field(default=4000, ge=200, le=20000, description="Max chars for browser_extract_text")
+
+
 class AudioConfig(BaseModel):
     """Configuration for audio recording and playback."""
 
@@ -95,6 +143,8 @@ class AppConfig(BaseModel):
     mlx_lm: MLXLMConfig = Field(default_factory=MLXLMConfig)
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
+    web_tools: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    browser_tools: BrowserToolsConfig = Field(default_factory=BrowserToolsConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
         default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user. Answer every question directly; never apologize or claim you cannot respond. Your responses are read aloud by text-to-speech, so spell out all abbreviations, units, and symbols in their full spoken form (for example, 'feet' instead of 'ft').",

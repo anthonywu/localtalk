@@ -96,10 +96,17 @@ class TestPlainTextRenderer:
 def _make_assistant_stub(config=None):
     """Create a VoiceAssistant via __new__ with no service init."""
     from localtalk.core.assistant import VoiceAssistant
+    from localtalk.services.tools.online import ConnectivityCache
 
     assistant = VoiceAssistant.__new__(VoiceAssistant)
     assistant.config = config or AppConfig()
     assistant.console = Console()
+    assistant.network_status = None
+    assistant.connectivity_cache = ConnectivityCache(
+        ttl_s=assistant.config.web_tools.status_ttl_s,
+        probe_timeout_s=assistant.config.web_tools.probe_timeout_s,
+        reachability_url=assistant.config.web_tools.reachability_url,
+    )
     return assistant
 
 

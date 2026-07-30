@@ -128,6 +128,36 @@ def parse_args():
         help="Minimum speech duration in milliseconds (default: 250)",
     )
 
+    # Online tools: web_search + local Playwright browser (same opt-in)
+    parser.add_argument(
+        "--enable-web",
+        action="store_true",
+        help=(
+            "Enable online tools: web_search (Wikipedia) and local Playwright browser "
+            "(navigate/snapshot/click/extract). Core STT/LLM/TTS stay local; network use "
+            "leaves this machine. Browser extra: uv pip install 'localtalk[browser]'"
+        ),
+    )
+    parser.add_argument(
+        "--skip-network-probe",
+        action="store_true",
+        help="Skip the startup internet reachability probe (still inspects local interfaces)",
+    )
+    parser.add_argument(
+        "--browser-engine",
+        choices=["chrome", "safari"],
+        default="chrome",
+        help=(
+            "Browser engine when --enable-web: chrome (system Google Chrome) or "
+            "safari (Playwright WebKit). Default: chrome"
+        ),
+    )
+    parser.add_argument(
+        "--browser-headed",
+        action="store_true",
+        help="With --enable-web, show the browser window (default is headless)",
+    )
+
     return parser.parse_args()
 
 
@@ -228,6 +258,16 @@ def main():
     # Apply VAD threshold and timing settings
     config.audio.vad_threshold = args.vad_threshold
     config.audio.vad_min_speech_duration_ms = args.vad_min_speech_ms
+
+    # Online tools: one flag enables web_search + browser tools together
+    if args.enable_web or os.environ.get("LOCALTALK_ENABLE_WEB") == "1":
+        config.web_tools.enabled = True
+        config.browser_tools.enabled = True
+    if args.skip_network_probe:
+        config.web_tools.startup_probe = False
+    config.browser_tools.engine = args.browser_engine
+    if args.browser_headed:
+        config.browser_tools.headed = True
 
     # Create and run assistant
     assistant = VoiceAssistant(config)

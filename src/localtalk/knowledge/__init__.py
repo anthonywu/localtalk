@@ -7,12 +7,14 @@ from localtalk.knowledge.packs import (
     get_pack,
     list_packs,
 )
+from localtalk.knowledge.query import KnowledgeQueryService
 from localtalk.knowledge.store import KnowledgeStore, get_default_store
 
 __all__ = [
     "DEFAULT_PACK_ID",
     "KNOWLEDGE_PACKS",
     "KnowledgePack",
+    "KnowledgeQueryService",
     "KnowledgeStore",
     "get_default_store",
     "get_pack",

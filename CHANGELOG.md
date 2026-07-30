@@ -5,6 +5,10 @@
 ### Added
 
 - Offline knowledge acquisition via Harmony tool calling: the assistant exposes an `acquire_knowledge` tool that downloads Kiwix ZIM packs into `~/.cache/localtalk/knowledge` (default: Simple English Wikipedia without pictures; also Best of Wikipedia, Simple Wiktionary, and Physics)
+- Offline knowledge query via `query_knowledge` (search/get over installed ZIM packs using libzim) with a multi-round Harmony tool loop
+- Tool registry under `services/tools/` for reasoning, knowledge, connectivity, and web handlers
+- `check_online` tool plus startup network status (macOS wifi/ethernet detection and reachability probe); `--skip-network-probe` to skip the probe
+- Opt-in online tools via `--enable-web` / `LOCALTALK_ENABLE_WEB=1`: `web_search` (Wikipedia) plus local Playwright browser tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_extract_text`, `browser_close`) using system Chrome (`--browser-engine chrome`) or Playwright WebKit / Safari engine (`safari`); optional `localtalk[browser]` extra; `--browser-headed` to show the window
 
 ### Changed
 

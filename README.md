@@ -40,7 +40,8 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
 - 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
-- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge` for airplane-mode world knowledge
+- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
+- 🌐 **Opt-in Web Search**: Pass `--enable-web` for Wikipedia lookups; startup shows network status and whether online tools are active
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
 - 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
@@ -197,6 +198,11 @@ localtalk
 - `--vad-mode {auto,manual,off}`: VAD mode (default: auto — starts listening immediately, detects start/stop). `manual` presses Enter to start, auto-stops on silence; `off` uses Enter to start and stop
 - `--vad-threshold FLOAT`: VAD sensitivity (0.0-1.0, default: 0.5)
 - `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
+
+**Online knowledge (opt-in):**
+
+- `--enable-web`: Register the Wikipedia `web_search` tool (searches leave this machine; STT/LLM/TTS stay local)
+- `--skip-network-probe`: Skip the startup internet reachability probe
 
 **TTS & Output Options:**
 
@@ -384,7 +390,7 @@ LocalTalk can download **offline knowledge packs** (Kiwix ZIM archives) into you
 ~/.cache/localtalk/knowledge/
 ```
 
-Ask by voice, for example: “download offline Wikipedia” or “what knowledge packs can I install?” The assistant calls the `acquire_knowledge` Harmony tool.
+Ask by voice, for example: “download offline Wikipedia” or “what knowledge packs can I install?” The assistant calls the `acquire_knowledge` Harmony tool. After a pack is installed, ask factual questions and it can call `query_knowledge` (`search` then `get`) to read from the local ZIM archive.
 
 | Pack id | What it is | Approx size |
 | --- | --- | --- |
@@ -393,7 +399,11 @@ Ask by voice, for example: “download offline Wikipedia” or “what knowledge
 | `wiktionary_en_simple_all_nopic` | Simple English Wiktionary | ~25 MB |
 | `wikipedia_en_physics_nopic` | Physics article selection | ~300 MB |
 
-Packs are resolved from the live Kiwix catalog at download time, then cached permanently under the path above (honors `XDG_CACHE_HOME` if set). Querying the installed archives for answers (RAG / ZIM search) is planned next.
+Packs are resolved from the live Kiwix catalog at download time, then cached permanently under the path above (honors `XDG_CACHE_HOME` if set).
+
+### Online knowledge (opt-in)
+
+By default LocalTalk stays offline-first. Pass `--enable-web` (or `LOCALTALK_ENABLE_WEB=1`) to register a Wikipedia `web_search` tool. Startup always probes connectivity (unless `--skip-network-probe`) and prints whether web search is available. Core STT/LLM/TTS still run locally; only explicit web lookups leave the machine. Use `check_online` anytime to ask about wifi/ethernet status.
 
 ### Other Planned Features
 

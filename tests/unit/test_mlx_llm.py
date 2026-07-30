@@ -10,9 +10,29 @@ import pytest
 from rich.console import Console
 
 from localtalk.models.config import MLXLMConfig, ReasoningLevel
-from localtalk.services.mlx_llm import _REASONING_MAP
+from localtalk.services.tools.reasoning import _REASONING_MAP
 
 pytestmark = pytest.mark.unit
+
+
+def _wire_tool_defaults(service, *, web_enabled: bool = False):
+    """Attach registry + web/knowledge deps required by generate_response.
+
+    ``web_enabled`` is the master switch for web_search + browser tools.
+    """
+    from localtalk.models.config import BrowserToolsConfig, WebToolsConfig
+    from localtalk.services.browser.session import BrowserSession
+    from localtalk.services.mlx_llm import MLXLanguageModelService
+    from localtalk.services.tools.online import ConnectivityCache
+
+    service.knowledge_store = getattr(service, "knowledge_store", None) or MagicMock()
+    service.knowledge_query = getattr(service, "knowledge_query", None) or MagicMock()
+    service.web_tools = WebToolsConfig(enabled=web_enabled, max_tool_rounds=3)
+    service.browser_tools = BrowserToolsConfig(enabled=web_enabled)
+    service.browser_session = MagicMock(spec=BrowserSession) if web_enabled else None
+    service.connectivity_cache = ConnectivityCache(ttl_s=45.0)
+    service.tool_registry = MLXLanguageModelService._build_tool_registry(service)
+    return service
 
 
 # ────────────────────────── reasoning map ──────────────────────────
@@ -56,7 +76,7 @@ class TestSaveAudioToTempFile:
         service.tokenizer = MagicMock()
         service.stream_generate = MagicMock()
         service.harmony = MagicMock()
-        return service
+        return _wire_tool_defaults(service)
 
     def test_empty_audio_raises(self):
         service = self._make_service()
@@ -145,7 +165,7 @@ class TestSessionHistory:
         service.tokenizer = MagicMock()
         service.stream_generate = MagicMock()
         service.harmony = MagicMock()
-        return service
+        return _wire_tool_defaults(service)
 
     def test_get_session_history_creates_new(self):
         service = self._make_service()
@@ -194,7 +214,7 @@ class TestGenerateResponse:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded fallback"
-        return service
+        return _wire_tool_defaults(service)
 
     @pytest.fixture
     def mock_parser(self, monkeypatch):
@@ -301,7 +321,7 @@ class TestReasoningChannelFiltering:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "RAW_REAS_NO_FINAL"
-        return service
+        return _wire_tool_defaults(service)
 
     def _patch_parser(self, monkeypatch, messages):
         """Patch StreamableParser to inject pre-built parsed messages."""
@@ -423,7 +443,7 @@ class TestFallbackAndRetry:
         service.harmony = MagicMock()
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded"
-        return service
+        return _wire_tool_defaults(service)
 
     @staticmethod
     def _patch_parsers(monkeypatch, message_lists):
@@ -513,7 +533,7 @@ class TestFallbackAndRetry:
 class TestReasoningToolCalls:
     """Mid-session reasoning changes via the set_reasoning_level harmony tool."""
 
-    def _make_service(self):
+    def _make_service(self, web_enabled: bool = False):
         from openai_harmony import ReasoningEffort
 
         from localtalk.services.mlx_llm import MLXLanguageModelService
@@ -534,7 +554,8 @@ class TestReasoningToolCalls:
         service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
         service.harmony.decode.return_value = "decoded"
         service.knowledge_store = MagicMock()
-        return service
+        service.knowledge_query = MagicMock()
+        return _wire_tool_defaults(service, web_enabled=web_enabled)
 
     @staticmethod
     def _patch_parsers(monkeypatch, message_lists):
@@ -657,13 +678,39 @@ class TestReasoningToolCalls:
         rendered_msgs = conv_mock.call_args[0][0]
         assert rendered_msgs[0].author.role == Role.SYSTEM
         assert rendered_msgs[1].author.role == Role.DEVELOPER
-        # Reasoning + knowledge tools are registered in the developer message
+        # Reasoning + knowledge + online tools are registered in the developer message
         dev_dump = rendered_msgs[1].content[0].model_dump()
         tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
         assert "set_reasoning_level" in tool_names
         assert "acquire_knowledge" in tool_names
+        assert "query_knowledge" in tool_names
+        assert "check_online" in tool_names
+        assert "web_search" not in tool_names
         # History follows the system/developer messages
         assert rendered_msgs[2].author.role == Role.USER
+
+    def test_web_and_browser_tools_registered_when_enable_web(self, monkeypatch):
+        """--enable-web is the master switch for web_search + browser_* tools."""
+        from openai_harmony import Role
+
+        service = self._make_service(web_enabled=True)
+        service.chat_history["default"] = []
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(return_value=iter([stop]))
+        conv_mock = self._patch_parsers(monkeypatch, [[self._final_msg("ok")]])
+
+        service.generate_response("hi")
+
+        rendered_msgs = conv_mock.call_args[0][0]
+        dev_dump = rendered_msgs[1].content[0].model_dump()
+        tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
+        assert "web_search" in tool_names
+        assert "browser_navigate" in tool_names
+        assert "browser_extract_text" in tool_names
+        assert "browser_close" in tool_names
+        assert Role.DEVELOPER == rendered_msgs[1].author.role
+        assert "Online tools are enabled" in rendered_msgs[1].content[0].instructions
+        assert service._max_tool_rounds() == 12
 
     def test_no_tool_call_leaves_effort_unchanged(self, monkeypatch):
         from openai_harmony import ReasoningEffort
@@ -762,3 +809,54 @@ class TestAcquireKnowledgeToolCalls:
 
         assert result == "Sorry, I couldn't download that knowledge pack."
         service.knowledge_store.acquire.assert_called_once_with("wiktionary_en_simple_all_nopic")
+
+
+class TestQueryKnowledgeToolLoop:
+    """Multi-round offline query_knowledge search → get."""
+
+    def test_search_then_get_rounds(self, monkeypatch):
+        service = TestReasoningToolCalls()._make_service()
+        service.knowledge_query.query.side_effect = [
+            {
+                "ok": True,
+                "action": "search",
+                "hits": [{"title": "Paris", "path": "A/Paris", "pack_id": "wikipedia_en_simple_all_nopic"}],
+            },
+            {
+                "ok": True,
+                "action": "get",
+                "title": "Paris",
+                "text": "Paris is the capital of France.",
+                "pack_id": "wikipedia_en_simple_all_nopic",
+            },
+        ]
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop]), iter([stop])])
+        TestReasoningToolCalls._patch_parsers(
+            monkeypatch,
+            [
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"action": "search", "query": "capital of France"},
+                        tool_name="query_knowledge",
+                    )
+                ],
+                [
+                    TestReasoningToolCalls._tool_call_msg(
+                        {"action": "get", "query": "Paris"},
+                        tool_name="query_knowledge",
+                    )
+                ],
+                [TestReasoningToolCalls._final_msg("Paris is the capital of France.")],
+            ],
+        )
+
+        result = service.generate_response("What is the capital of France?")
+
+        assert result == "Paris is the capital of France."
+        assert service.knowledge_query.query.call_count == 2
+        history = service.chat_history["default"]
+        # user + search call + result + get call + result + final
+        assert len(history) == 6
+        assert history[1].recipient == "functions.query_knowledge"
+        assert history[3].recipient == "functions.query_knowledge"

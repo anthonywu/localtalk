@@ -19,6 +19,11 @@ from localtalk.models.config import AppConfig
 from localtalk.services.audio import AudioService
 from localtalk.services.mlx_llm import MLXLanguageModelService
 from localtalk.services.speech_recognition import SpeechRecognitionService
+from localtalk.services.tools.online import (
+    ConnectivityCache,
+    format_network_status_line,
+    format_privacy_banner_lines,
+)
 
 # Escape character and arrow-key escape sequence prefix
 _ESC = "\x1b"
@@ -166,6 +171,12 @@ class VoiceAssistant:
     def __init__(self, config: AppConfig | None = None):
         self.config = config or AppConfig()
         self.console = Console()
+        self.network_status = None
+        self.connectivity_cache = ConnectivityCache(
+            ttl_s=self.config.web_tools.status_ttl_s,
+            probe_timeout_s=self.config.web_tools.probe_timeout_s,
+            reachability_url=self.config.web_tools.reachability_url,
+        )
 
         # Enhance system prompt with current datetime context
         self._enhance_system_prompt()
@@ -266,7 +277,14 @@ class VoiceAssistant:
             # Language model with audio support
             init_messages.append(f"🤖 Loading LLM: {self.config.mlx_lm.model}")
             live.update(create_panel())
-            self.llm = MLXLanguageModelService(self.config.mlx_lm, self.config.system_prompt, quiet_console)
+            self.llm = MLXLanguageModelService(
+                self.config.mlx_lm,
+                self.config.system_prompt,
+                quiet_console,
+                web_tools=self.config.web_tools,
+                browser_tools=self.config.browser_tools,
+                connectivity_cache=self.connectivity_cache,
+            )
             # Model loading stays inside the init panel, but runtime output —
             # the response text (printed before TTS so users can read ahead),
             # generation spinner, retry warnings, and reasoning-level updates —
@@ -336,6 +354,42 @@ class VoiceAssistant:
                 '(say "think harder" or "think faster" to change it anytime)'
             )
 
+            # Network / online capabilities
+            init_messages.append("🌐 Checking network...")
+            live.update(create_panel())
+            if self.config.web_tools.startup_probe:
+                self.network_status = self.connectivity_cache.get(probe=True, force=True)
+            else:
+                self.network_status = self.connectivity_cache.get(probe=False, force=True)
+            web_enabled = self.config.web_tools.enabled
+            # Replace the "Checking network..." line with the result
+            init_messages[-1] = format_network_status_line(self.network_status, web_enabled=web_enabled)
+            if self.network_status.reachable and web_enabled:
+                init_messages.append(
+                    "   Capabilities: check_online, web_search, browser_navigate/snapshot/click/type/extract"
+                )
+            elif self.network_status.reachable and not web_enabled:
+                init_messages.append(
+                    "   Online capabilities available — start with --enable-web (web search + local browser tools)"
+                )
+
+            # Browser engine check when online tools are on (--enable-web)
+            if self.config.web_tools.enabled:
+                from localtalk.services.browser.session import browser_engine_status
+
+                init_messages.append("🧭 Checking browser engine...")
+                live.update(create_panel())
+                status = browser_engine_status(self.config.browser_tools.engine)
+                if status.get("ok"):
+                    headed = "headed" if self.config.browser_tools.headed else "headless"
+                    init_messages[-1] = (
+                        f"🧭 Browser: ready ({self.config.browser_tools.engine}, {headed}) — {status.get('detail', '')}"
+                    )
+                else:
+                    init_messages[-1] = (
+                        f"🧭 Browser: unavailable ({self.config.browser_tools.engine}) — {status.get('error')}"
+                    )
+
             # Final update with all information
             init_messages.append("\n✅ Ready!")
             live.update(create_panel())
@@ -344,12 +398,20 @@ class VoiceAssistant:
 
     def _print_privacy_banner(self):
         """Print privacy information banner."""
+        status = self.network_status
+        if status is None:
+            status_lines = [
+                "✅ Everything runs 100% locally on your Mac",
+                "✅ No tracking, no telemetry, no cloud APIs",
+                "",
+                "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            ]
+        else:
+            status_lines = format_privacy_banner_lines(status, web_enabled=self.config.web_tools.enabled)
         privacy_content = [
-            "✅ Everything runs 100% locally on your Mac",
-            "✅ No tracking, no telemetry, no cloud APIs",
-            "",
-            "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
+            *status_lines,
             '[dim]💡 TIP: Adjust thinking depth anytime — say "think harder", "think faster", or "use low/medium/high reasoning"[/dim]',
+            '[dim]💡 TIP: Download offline Wikipedia anytime — say "download offline knowledge"[/dim]',
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
@@ -597,4 +659,9 @@ class VoiceAssistant:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         self.console.print("\n[red]Exiting...")
+        if getattr(self, "llm", None) is not None:
+            try:
+                self.llm.close()
+            except Exception:
+                pass
         self.console.print("[blue]Thank you for using Local Voice Assistant!")

@@ -14,86 +14,32 @@ from openai_harmony import (
     DeveloperContent,
     HarmonyEncoding,
     Message,
-    ReasoningEffort,
     Role,
     StreamableParser,
     SystemContent,
-    ToolDescription,
     load_harmony_encoding,
 )
 from rich.console import Console
 
-from localtalk.knowledge.packs import DEFAULT_PACK_ID, pack_ids
+from localtalk.knowledge.query import KnowledgeQueryService
 from localtalk.knowledge.store import KnowledgeStore, get_default_store
-from localtalk.models.config import MLXLMConfig, ReasoningLevel
+from localtalk.models.config import BrowserToolsConfig, MLXLMConfig, ReasoningLevel, WebToolsConfig
+from localtalk.services.browser.session import BrowserSession
+from localtalk.services.tools.base import ToolRegistry
+from localtalk.services.tools.browser import make_browser_tools
+from localtalk.services.tools.knowledge import make_acquire_knowledge_tool, make_query_knowledge_tool
+from localtalk.services.tools.online import ConnectivityCache, make_check_online_tool
+from localtalk.services.tools.reasoning import make_reasoning_tool, reasoning_effort_for
+from localtalk.services.tools.web import make_web_search_tool
 
-_REASONING_MAP: dict[ReasoningLevel, ReasoningEffort] = {
-    ReasoningLevel.LOW: ReasoningEffort.LOW,
-    ReasoningLevel.MEDIUM: ReasoningEffort.MEDIUM,
-    ReasoningLevel.HIGH: ReasoningEffort.HIGH,
-}
-
-_REASONING_TOOL_NAME = "set_reasoning_level"
-_REASONING_TOOL = ToolDescription.new(
-    _REASONING_TOOL_NAME,
-    (
-        "Change the assistant's reasoning effort for the rest of the conversation. "
-        "Use this when the user asks to think more deeply or more quickly, or to "
-        "otherwise change how much reasoning to use (e.g. 'think harder', 'stop "
-        "overthinking', 'use high reasoning', 'think faster'). Levels: 'low' is "
-        "fastest and best for casual chat, 'medium' is the balanced default, "
-        "'high' is deepest and best for hard questions."
-    ),
-    {
-        "type": "object",
-        "properties": {
-            "level": {
-                "type": "string",
-                "enum": [level.value for level in ReasoningLevel],
-                "description": "The new reasoning effort level",
-            },
-        },
-        "required": ["level"],
-        "additionalProperties": False,
-    },
+_WEB_PROMPT_ADDENDUM = (
+    "\n\nOnline tools are enabled (--enable-web). You may call web_search for current "
+    "or world facts when offline packs are insufficient, and browser_navigate / "
+    "browser_snapshot / browser_extract_text / browser_click / browser_type / "
+    "browser_close to drive a local browser. Prefer query_knowledge when a local pack "
+    "is installed. Call check_online if unsure about connectivity. Network use leaves "
+    "this machine — keep answers concise and spoken-friendly. Close the browser when done."
 )
-
-_ACQUIRE_KNOWLEDGE_TOOL_NAME = "acquire_knowledge"
-_ACQUIRE_KNOWLEDGE_PACK_ENUM = ["list", *pack_ids()]
-_ACQUIRE_KNOWLEDGE_TOOL = ToolDescription.new(
-    _ACQUIRE_KNOWLEDGE_TOOL_NAME,
-    (
-        "Download an offline knowledge pack into the user's home cache so LocalTalk "
-        "can use world knowledge without the internet (airplane mode). Call this when "
-        "the user asks to download Wikipedia, get offline knowledge, install a "
-        "knowledge base, or similar. "
-        f"Default pack is {DEFAULT_PACK_ID} (Simple English Wikipedia without "
-        "pictures, about 1 gigabyte) — recommend this first. Other packs: "
-        "wikipedia_en_top_nopic (Best of English Wikipedia, about 2 gigabytes), "
-        "wiktionary_en_simple_all_nopic (Simple English dictionary, about 25 "
-        "megabytes), wikipedia_en_physics_nopic (physics articles, about 300 "
-        "megabytes). Pass pack='list' to list available packs and what is already "
-        "installed. Packs are stored under ~/.cache/localtalk/knowledge and kept "
-        "for future sessions."
-    ),
-    {
-        "type": "object",
-        "properties": {
-            "pack": {
-                "type": "string",
-                "enum": _ACQUIRE_KNOWLEDGE_PACK_ENUM,
-                "description": (
-                    f"Pack to download, or 'list' to show options. "
-                    f"Omit or use {DEFAULT_PACK_ID} for the recommended default."
-                ),
-            },
-        },
-        "required": [],
-        "additionalProperties": False,
-    },
-)
-
-_FUNCTION_TOOLS = [_REASONING_TOOL, _ACQUIRE_KNOWLEDGE_TOOL]
 
 
 class MLXLanguageModelService:
@@ -105,19 +51,80 @@ class MLXLanguageModelService:
         system_prompt: str,
         console: Console | None = None,
         knowledge_store: KnowledgeStore | None = None,
+        web_tools: WebToolsConfig | None = None,
+        browser_tools: BrowserToolsConfig | None = None,
+        connectivity_cache: ConnectivityCache | None = None,
+        browser_session: BrowserSession | None = None,
     ):
         self.config = config
         self.system_prompt = system_prompt
         self.console = console or Console()
         self.chat_history: dict[str, list[Message]] = {}
-        self.reasoning_effort = _REASONING_MAP[config.reasoning_effort]
+        self.reasoning_effort = reasoning_effort_for(config.reasoning_effort)
         self.knowledge_store = knowledge_store or get_default_store(console=self.console)
+        self.knowledge_query = KnowledgeQueryService(self.knowledge_store)
+        self.web_tools = web_tools or WebToolsConfig()
+        self.browser_tools = browser_tools or BrowserToolsConfig()
+        self.connectivity_cache = connectivity_cache or ConnectivityCache(
+            ttl_s=self.web_tools.status_ttl_s,
+            probe_timeout_s=self.web_tools.probe_timeout_s,
+            reachability_url=self.web_tools.reachability_url,
+        )
+        self.browser_session = browser_session
+        # --enable-web is the master switch for both web_search and browser tools
+        if self.web_tools.enabled:
+            self.browser_tools.enabled = True
+            if self.browser_session is None:
+                self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
+        self.tool_registry = self._build_tool_registry()
         self._load_model()
         self._init_harmony()
 
+    def _build_tool_registry(self) -> ToolRegistry:
+        registry = ToolRegistry()
+
+        def set_effort(level: str) -> dict:
+            self.reasoning_effort = reasoning_effort_for(ReasoningLevel(level))
+            self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
+            return {"ok": True, "reasoning_effort": level}
+
+        registry.register(make_reasoning_tool(set_effort))
+        registry.register(make_acquire_knowledge_tool(self.knowledge_store, self.console.print))
+        registry.register(make_query_knowledge_tool(self.knowledge_query, self.console.print))
+        registry.register(make_check_online_tool(self.connectivity_cache))
+        if self.web_tools.enabled:
+            registry.register(
+                make_web_search_tool(
+                    self.connectivity_cache,
+                    max_results_default=self.web_tools.search_max_results,
+                    timeout_s=self.web_tools.search_timeout_s,
+                    console_print=self.console.print,
+                )
+            )
+            if self.browser_session is not None:
+                for spec in make_browser_tools(self.browser_session):
+                    registry.register(spec)
+        return registry
+
+    def _developer_instructions(self) -> str:
+        prompt = self.system_prompt
+        # Master switch: --enable-web enables web_search + browser tools together
+        if self.web_tools.enabled and _WEB_PROMPT_ADDENDUM.strip() not in prompt:
+            prompt = prompt + _WEB_PROMPT_ADDENDUM
+        return prompt
+
+    def _max_tool_rounds(self) -> int:
+        if self.web_tools.enabled:
+            return max(self.web_tools.max_tool_rounds, self.browser_tools.max_tool_rounds)
+        return self.web_tools.max_tool_rounds
+
+    def close(self) -> None:
+        """Release browser resources if any."""
+        if self.browser_session is not None:
+            self.browser_session.close()
+
     def _load_model(self):
         """Load the MLX model and processor."""
-        # Check platform support
         if platform.system() != "Darwin":
             self.console.print("[yellow]Warning: MLX is optimized for macOS with Apple Silicon.")
             self.console.print("[yellow]Other platforms may have limited functionality or performance.")
@@ -150,9 +157,6 @@ class MLXLanguageModelService:
     def _init_harmony(self):
         """Initialize the Harmony encoding for chat template rendering and parsing."""
         self.harmony: HarmonyEncoding = load_harmony_encoding("HarmonyGptOss")
-        # gpt-oss terminates tool calls with <|call|>, but mlx_lm only stops
-        # generation on the tokenizer's eos ids — register the Harmony stop
-        # tokens so generation halts after a tool call instead of rambling on.
         try:
             eos_ids = getattr(self.tokenizer, "eos_token_ids", None)
             if isinstance(eos_ids, set):
@@ -162,54 +166,26 @@ class MLXLanguageModelService:
         self.console.print("[green]Harmony encoding initialized.")
 
     def _get_session_history(self, session_id: str) -> list[Message]:
-        """Get or create chat history for a session."""
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
         return self.chat_history[session_id]
 
     def _save_audio_to_temp_file(self, audio_array: np.ndarray, sample_rate: int) -> str:
-        """Save audio array to a temporary WAV file.
-
-        Args:
-            audio_array: Audio data as numpy array
-            sample_rate: Sample rate of the audio
-
-        Returns:
-            Path to the temporary audio file
-
-        Raises:
-            ValueError: If audio array is invalid
-            OSError: If unable to write file
-
-        """
-        # Validate audio array
         if audio_array is None or audio_array.size == 0:
             raise ValueError("Audio array is empty or None")
 
-        # Ensure audio is in the correct format
         if audio_array.dtype not in [np.float32, np.float64, np.int16, np.int32]:
-            # Convert to float32 for compatibility
             audio_array = audio_array.astype(np.float32)
 
-        # Process audio for better quality
         if audio_array.dtype in [np.float32, np.float64]:
-            # Remove DC offset
             audio_array = audio_array - np.mean(audio_array)
-
-            # Calculate RMS
             rms = np.sqrt(np.mean(audio_array**2))
-
-            # If audio is too quiet, amplify it
-            if rms < 0.02:  # Less aggressive threshold
+            if rms < 0.02:
                 self.console.print(f"[yellow]Audio quiet (RMS={rms:.4f}), amplifying...[/yellow]")
-                # Target RMS of 0.1 (reasonable level)
                 if rms > 0:
-                    target_rms = 0.1
-                    audio_array = audio_array * (target_rms / rms)
-
-            # Normalize to prevent clipping
+                    audio_array = audio_array * (0.1 / rms)
             max_val = np.abs(audio_array).max()
-            if max_val > 0.95:  # Leave some headroom
+            if max_val > 0.95:
                 self.console.print(f"[yellow]Normalizing audio (max={max_val:.3f})[/yellow]")
                 audio_array = audio_array * (0.95 / max_val)
 
@@ -222,16 +198,11 @@ class MLXLanguageModelService:
             raise OSError(f"Failed to save audio to temporary file: {e}") from e
 
     def _build_prompt_messages(self, history: list[Message], extra: list[Message]) -> list[Message]:
-        """Build the full message list for a completion.
-
-        The system and developer messages are rendered on EVERY turn (they are
-        not stored in history): the system message carries the reasoning effort,
-        so mid-session reasoning changes only take effect when it is re-rendered
-        each turn. The developer message carries the instructions and tools.
-        """
         sys_content = SystemContent.new().with_reasoning_effort(self.reasoning_effort)
         dev_content = (
-            DeveloperContent.new().with_instructions(self.system_prompt).with_function_tools(_FUNCTION_TOOLS)
+            DeveloperContent.new()
+            .with_instructions(self._developer_instructions())
+            .with_function_tools(self.tool_registry.descriptions())
         )
         return [
             Message.from_role_and_content(Role.SYSTEM, sys_content),
@@ -241,7 +212,6 @@ class MLXLanguageModelService:
         ]
 
     def _record_turn(self, session_id: str, history: list[Message], new_messages: list[Message]) -> None:
-        """Append messages to the session history, keeping it bounded."""
         history.extend(new_messages)
         max_msgs = self.config.history_max_messages
         if len(history) > max_msgs:
@@ -250,15 +220,6 @@ class MLXLanguageModelService:
             self.chat_history[session_id] = history
 
     def _stream_tokens(self, prompt_tokens: list[int], max_tokens: int) -> tuple[list[int], str | None]:
-        """Stream raw token IDs from the model along with the finish reason.
-
-        Raw tokens are collected (rather than decoded text) so that Harmony
-        special tokens and channel boundaries are preserved for parsing.
-
-        Returns:
-            Tuple of (generated token IDs, finish reason: "stop", "length", or None).
-        """
-        # Build sampler and logits processors using the mlx_lm API
         sampler = self._make_sampler(
             temp=self.config.temperature,
             top_p=self.config.top_p,
@@ -285,37 +246,25 @@ class MLXLanguageModelService:
         return generated_tokens, finish_reason
 
     def _parse_response(self, generated_tokens: list[int], debug_mode: bool) -> tuple[str, list[Message]]:
-        """Parse generated tokens into the user-facing response text.
-
-        Extracts the Harmony "final" channel, falling back to the last
-        non-reasoning channel. Returns (response text, parsed messages); the
-        text is empty when no usable user-facing content was produced — e.g.
-        when generation was truncated while still in the analysis channel, or
-        when the model produced a tool call instead of an answer.
-        """
         if debug_mode:
             raw_text = self.harmony.decode(generated_tokens)
             self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
             self.console.print(f"[dim]{raw_text!r}[/dim]")
 
-        # Parse the raw tokens using Harmony StreamableParser
         parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
         for tok in generated_tokens:
             parser.process(tok)
         try:
             parser.process_eos()
         except Exception:
-            pass  # EOS processing may fail if response is truncated
+            pass
 
         parsed_messages = parser.messages
-
         if debug_mode:
             self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
 
-        # Log all channels for debugging, extract "final" for response
         clean_response = ""
         for msg in parsed_messages:
-            # Extract text content from message
             msg_text = ""
             for content in msg.content:
                 if hasattr(content, "text"):
@@ -329,11 +278,9 @@ class MLXLanguageModelService:
             if msg.channel == "final":
                 clean_response = msg_text
             elif msg.channel in ("analysis", "commentary"):
-                # Only show reasoning channels if explicitly enabled
                 if debug_mode or self.config.show_reasoning:
                     self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
 
-        # Fallback: if no "final" channel found, use last non-reasoning message content
         if not clean_response and parsed_messages:
             for msg in reversed(parsed_messages):
                 if msg.channel in ("analysis", "commentary"):
@@ -348,11 +295,6 @@ class MLXLanguageModelService:
         return clean_response, parsed_messages
 
     def _extract_function_tool_call(self, parsed_messages: list[Message]) -> tuple[Message, str, dict] | None:
-        """Find a functions.* tool call in parsed messages, if any.
-
-        Tool calls arrive on the commentary channel addressed to
-        ``functions.<name>``, with JSON arguments as content.
-        """
         for msg in reversed(parsed_messages):
             recipient = msg.recipient or ""
             if not recipient.startswith("functions."):
@@ -372,103 +314,56 @@ class MLXLanguageModelService:
             return msg, tool_name, args
         return None
 
-    def _execute_tool(self, tool_name: str, args: dict) -> dict:
-        """Run a registered function tool and return a JSON-serializable result."""
-        if tool_name == _REASONING_TOOL_NAME:
-            level = str(args.get("level", "")).lower()
-            valid_levels = {member.value for member in ReasoningLevel}
-            if level in valid_levels:
-                self.reasoning_effort = _REASONING_MAP[ReasoningLevel(level)]
-                self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
-                return {"ok": True, "reasoning_effort": level}
-            return {
-                "ok": False,
-                "error": f"invalid reasoning level {level!r}; expected low, medium, or high",
-            }
-
-        if tool_name == _ACQUIRE_KNOWLEDGE_TOOL_NAME:
-            pack = args.get("pack")
-            pack_id = None if pack is None else str(pack)
-            self.console.print(
-                f"[cyan]Acquiring knowledge pack: {pack_id or DEFAULT_PACK_ID}[/cyan]"
-            )
-            return self.knowledge_store.acquire(pack_id)
-
-        return {"ok": False, "error": f"unknown tool {tool_name!r}"}
-
-    def _spoken_tool_fallback(self, tool_name: str, result: dict, args: dict) -> str:
-        """Speak a confirmation when the model produces no final channel text."""
-        if tool_name == _REASONING_TOOL_NAME:
-            if result.get("ok"):
-                return f"Okay, I've set my reasoning level to {result.get('reasoning_effort')}."
-            return "Sorry, I couldn't change the reasoning level."
-
-        if tool_name == _ACQUIRE_KNOWLEDGE_TOOL_NAME:
-            if args.get("pack") == "list" or result.get("packs") is not None:
-                installed = [p["title"] for p in result.get("packs", []) if p.get("installed")]
-                if installed:
-                    return (
-                        "Here are the offline knowledge packs I can download. "
-                        f"Already installed: {', '.join(installed)}. "
-                        "The recommended default is Simple English Wikipedia."
-                    )
-                return (
-                    "Here are the offline knowledge packs I can download. "
-                    "I recommend starting with Simple English Wikipedia, about one gigabyte."
-                )
-            if result.get("ok"):
-                title = result.get("title") or "that knowledge pack"
-                if result.get("already_installed"):
-                    return f"{title} is already downloaded and ready in your local cache."
-                return f"Okay, I've downloaded {title} into your local cache."
-            return "Sorry, I couldn't download that knowledge pack."
-
-        return "Sorry, I couldn't complete that tool request."
-
-    def _handle_tool_call(
+    def _run_tool_loop(
         self,
-        call_msg: Message,
-        tool_name: str,
-        args: dict,
         text: str,
         session_id: str,
         history: list[Message],
+        first_call: tuple[Message, str, dict],
         debug_mode: bool,
     ) -> str:
-        """Execute a function tool call and generate a spoken confirmation.
-
-        Feeds the tool result back to the model so it can confirm naturally,
-        and records the whole exchange in history.
-        """
-        result = self._execute_tool(tool_name, args)
-        recipient = f"functions.{tool_name}"
-        tool_response = (
-            Message.from_author_and_content(Author.new(Role.TOOL, recipient), json.dumps(result))
-            .with_channel("commentary")
-            .with_recipient("assistant")
-        )
+        """Execute one or more function tools (up to max_tool_rounds) then return spoken text."""
         user_message = Message.from_role_and_content(Role.USER, text)
+        exchange: list[Message] = [user_message]
+        call_msg, tool_name, args = first_call
+        last_tool_name = tool_name
+        last_result: dict = {}
+        last_args = args
+        max_rounds = self._max_tool_rounds()
 
-        followup_messages = self._build_prompt_messages(history, [user_message, call_msg, tool_response])
-        conversation = Conversation.from_messages(followup_messages)
-        prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
+        for round_idx in range(max_rounds):
+            result = self.tool_registry.dispatch(tool_name, args)
+            last_tool_name, last_result, last_args = tool_name, result, args
+            recipient = f"functions.{tool_name}"
+            tool_response = (
+                Message.from_author_and_content(Author.new(Role.TOOL, recipient), json.dumps(result))
+                .with_channel("commentary")
+                .with_recipient("assistant")
+            )
+            exchange.extend([call_msg, tool_response])
 
-        followup_tokens, _ = self._stream_tokens(prompt_tokens, self.config.max_tokens)
-        clean_response, _ = self._parse_response(followup_tokens, debug_mode)
+            followup_messages = self._build_prompt_messages(history, exchange)
+            conversation = Conversation.from_messages(followup_messages)
+            prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
+            followup_tokens, _ = self._stream_tokens(prompt_tokens, self.config.max_tokens)
+            clean_response, parsed_messages = self._parse_response(followup_tokens, debug_mode)
 
-        if not clean_response:
-            clean_response = self._spoken_tool_fallback(tool_name, result, args)
+            next_call = self._extract_function_tool_call(parsed_messages)
+            if next_call is not None and round_idx + 1 < max_rounds:
+                call_msg, tool_name, args = next_call
+                continue
 
-        self._record_turn(
-            session_id,
-            history,
-            [
-                user_message,
-                call_msg,
-                tool_response,
-                Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"),
-            ],
-        )
+            if not clean_response:
+                clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+
+            exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+            self._record_turn(session_id, history, exchange)
+            return clean_response
+
+        # Exhausted rounds without a final answer
+        clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
+        exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+        self._record_turn(session_id, history, exchange)
         return clean_response
 
     def generate_response(
@@ -478,25 +373,11 @@ class MLXLanguageModelService:
         audio_array: np.ndarray | None = None,
         sample_rate: int | None = None,
     ) -> str:
-        """Generate a response to the input text and/or audio.
-
-        Args:
-            text: Input text from the user
-            session_id: Session ID for conversation history
-            audio_array: Optional audio input as numpy array
-            sample_rate: Sample rate for the audio (required if audio_array is provided)
-
-        Returns:
-            Generated response text
-
-        """
-        # Get conversation history
+        """Generate a response to the input text and/or audio."""
         history = self._get_session_history(session_id)
 
-        # Handle audio input if provided
         audio_files = []
         if audio_array is not None and sample_rate is not None:
-            # Debug audio input
             self.console.print("[yellow]Audio input debug:[/yellow]")
             self.console.print(f"  Shape: {audio_array.shape}")
             self.console.print(f"  Dtype: {audio_array.dtype}")
@@ -504,36 +385,23 @@ class MLXLanguageModelService:
             self.console.print(f"  Duration: {len(audio_array) / sample_rate:.2f}s")
             self.console.print(f"  Range: [{audio_array.min():.3f}, {audio_array.max():.3f}]")
             self.console.print(f"  RMS: {np.sqrt(np.mean(audio_array**2)):.3f}")
-
-            # Save audio to temporary file
             audio_path = self._save_audio_to_temp_file(audio_array, sample_rate)
             audio_files = [audio_path]
             self.console.print(f"[cyan]Saved audio to: {audio_path}")
 
-        # Note: mlx-lm does not support audio input directly.
-        # For audio input, use text generation based on the provided text parameter
         if audio_files:
-            # Audio input mode - use the text parameter as the prompt
             self.console.print("[yellow]Audio input detected. Using text-based processing.")
             if not text or text == "Listen to this audio and respond conversationally to what you hear.":
                 text = "Please process the audio input and respond."
 
-        # Build the conversation. System (carrying the current reasoning effort)
-        # and developer (instructions + tools) messages are rendered on every
-        # turn — they are not stored in history, and mid-session reasoning
-        # changes only take effect because the system message is re-rendered.
         user_message = Message.from_role_and_content(Role.USER, text)
         messages = self._build_prompt_messages(history, [user_message])
-
-        # Render conversation to tokens using Harmony
         conversation = Conversation.from_messages(messages)
         prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
-
         debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
 
         generated_tokens, finish_reason = self._stream_tokens(prompt_tokens, self.config.max_tokens)
 
-        # Clean up temporary audio files
         for audio_file in audio_files:
             try:
                 Path(audio_file).unlink()
@@ -542,20 +410,12 @@ class MLXLanguageModelService:
 
         clean_response, parsed_messages = self._parse_response(generated_tokens, debug_mode)
 
-        # Function tools (reasoning control, offline knowledge acquisition, …)
-        # arrive on the commentary channel addressed to functions.<name>.
         tool_call = self._extract_function_tool_call(parsed_messages)
         if tool_call is not None:
-            call_msg, tool_name, call_args = tool_call
-            clean_response = self._handle_tool_call(
-                call_msg, tool_name, call_args, text, session_id, history, debug_mode
-            )
+            clean_response = self._run_tool_loop(text, session_id, history, tool_call, debug_mode)
             self.console.print(f"[cyan]Assistant: {clean_response}")
             return clean_response
 
-        # gpt-oss reasons in the analysis channel before answering, so a
-        # length-truncated generation can end before any "final" content exists.
-        # Retry once with a larger token budget to let the answer complete.
         if not clean_response and finish_reason == "length":
             retry_max_tokens = max(self.config.max_tokens * 4, 512)
             self.console.print(
@@ -575,12 +435,6 @@ class MLXLanguageModelService:
                 ],
             )
         else:
-            # Safe fallback: if no final/non-reasoning content was parsed, do not
-            # return raw decoded tokens (which may contain reasoning/channel markup)
-            # to TTS — use a neutral spoken fallback instead. The failed turn is
-            # deliberately NOT saved to history: persisting the fallback text as an
-            # assistant message would teach the model to imitate the apology on
-            # later turns.
             self.console.print("[yellow]No usable response generated; skipping history for this turn.[/yellow]")
             clean_response = "I'm sorry, I couldn't produce a response."
 
