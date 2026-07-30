@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -126,6 +127,31 @@ class TestEnhanceSystemPrompt:
         original = config.system_prompt
         assistant._enhance_system_prompt()
         assert assistant.config.system_prompt == original
+
+
+# ────────────────────────── _init_services ──────────────────────────
+
+
+class TestInitServices:
+    def test_runtime_services_use_interactive_console(self, monkeypatch, fake_sounddevice):
+        """LLM/audio services load quietly into the init panel, but their runtime
+        output (response text read-ahead, retry warnings, reasoning updates,
+        recording status) must render to the interactive console."""
+        assistant = _make_assistant_stub()
+        llm_instance = MagicMock()
+        audio_instance = MagicMock()
+        monkeypatch.setattr("localtalk.core.assistant.SpeechRecognitionService", MagicMock())
+        monkeypatch.setattr(
+            "localtalk.core.assistant.MLXLanguageModelService",
+            MagicMock(return_value=llm_instance),
+        )
+        monkeypatch.setattr("localtalk.services.mlx_tts.MLXTextToSpeechService", MagicMock())
+        monkeypatch.setattr("localtalk.core.assistant.AudioService", MagicMock(return_value=audio_instance))
+
+        assistant._init_services()
+
+        assert llm_instance.console is assistant.console
+        assert audio_instance.console is assistant.console
 
 
 # ────────────────────────── _process_text_response ──────────────────────────
@@ -268,6 +294,42 @@ class TestProcessVoiceResponse:
 # ────────────────────────── process_voice_input ──────────────────────────
 
 
+class TestRunShutdown:
+    """run() must install SIG_IGN for SIGINT after the loop ends so a second
+    Ctrl+C during interpreter shutdown doesn't surface an ugly
+    ``threading._shutdown`` traceback."""
+
+    def test_sigint_ignored_after_normal_exit(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(return_value=False)
+
+        with patch("localtalk.core.assistant.signal.signal") as mock_signal:
+            assistant.run()
+
+        mock_signal.assert_called_with(signal.SIGINT, signal.SIG_IGN)
+
+    def test_sigint_ignored_after_keyboard_interrupt(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(side_effect=KeyboardInterrupt())
+
+        with patch("localtalk.core.assistant.signal.signal") as mock_signal:
+            assistant.run()
+
+        mock_signal.assert_called_with(signal.SIGINT, signal.SIG_IGN)
+
+    def test_goodbye_message_still_printed(self):
+        assistant = _make_assistant_stub()
+        assistant.process_voice_input = MagicMock(return_value=False)
+        assistant.console = MagicMock()
+
+        with patch("localtalk.core.assistant.signal.signal"):
+            assistant.run()
+
+        printed = [str(call.args[0]) for call in assistant.console.print.call_args_list]
+        assert any("Exiting" in p for p in printed)
+        assert any("Thank you for using Local Voice Assistant" in p for p in printed)
+
+
 class TestProcessVoiceInput:
     def _make_assistant_with_mocks(self):
         assistant = _make_assistant_stub()
@@ -330,23 +392,32 @@ class TestProcessVoiceInput:
         assistant._get_text_input = MagicMock(return_value="typed message")
         assistant._process_text_response = MagicMock()
 
-        # Simulate Esc by patching the esc listener to not run
         class FakeThread:
             def __init__(self, **kwargs):
                 self._target = kwargs.get("target")
                 self.daemon = kwargs.get("daemon", False)
 
             def start(self):
-                pass  # Don't actually run the listener
+                self._target()
 
             def join(self, timeout=None):
                 pass
 
-        with patch("localtalk.core.assistant.threading.Thread", FakeThread):
-            # Patch termios/tty so the listener guard doesn't crash
-            with patch("localtalk.core.assistant.termios"), patch("localtalk.core.assistant.tty"):
-                result = assistant.process_voice_input()
+        stdin = MagicMock()
+        stdin.fileno.return_value = 10
+        stdin.isatty.return_value = True
+        with (
+            patch("localtalk.core.assistant.threading.Thread", FakeThread),
+            patch("localtalk.core.assistant.sys.stdin", stdin),
+            patch("localtalk.core.assistant._stdin_has_key", return_value=True),
+            patch("localtalk.core.assistant._read_key_raw", return_value="\x1b"),
+            patch("localtalk.core.assistant.termios") as termios_mock,
+            patch("localtalk.core.assistant.tty") as tty_mock,
+        ):
+            result = assistant.process_voice_input()
 
-        # Since user_pressed_esc is not set (listener didn't run),
-        # this falls through to the no-speech path
         assert result is True
+        tty_mock.setcbreak.assert_called_once_with(10)
+        tty_mock.setraw.assert_not_called()
+        termios_mock.tcsetattr.assert_called_once()
+        assistant._process_text_response.assert_called_once_with("typed message")

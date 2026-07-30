@@ -1,21 +1,21 @@
 # Test Catalog — LocalTalk Unit Test Suite
 
-> **168 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **62% overall**.
+> **204 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
 >
 > Counts include parametrized cases. Coverage values below come from `uv run pytest --cov-report=term-missing`.
 
 ## Table of contents
 
 - [Shared fixtures](#shared-fixtures-testsconftestpy)
-- [Configuration models — 14 tests](#configuration-models--14-tests)
-- [MLX compatibility — 5 tests](#mlx-compatibility--5-tests)
-- [CLI — 34 tests](#cli--34-tests)
+- [Configuration models — 19 tests](#configuration-models--19-tests)
+- [MLX compatibility — 8 tests](#mlx-compatibility--8-tests)
+- [CLI — 40 tests](#cli--40-tests)
 - [Audio service — 12 tests](#audio-service--12-tests)
-- [Waveform and automatic VAD — 18 tests](#waveform-and-automatic-vad--18-tests)
+- [Waveform and automatic VAD — 23 tests](#waveform-and-automatic-vad--23-tests)
 - [Whisper speech recognition — 11 tests](#whisper-speech-recognition--11-tests)
-- [MLX text-to-speech — 9 tests](#mlx-text-to-speech--9-tests)
-- [MLX language model — 30 tests](#mlx-language-model--30-tests)
-- [Voice assistant orchestration — 35 tests](#voice-assistant-orchestration--35-tests)
+- [MLX text-to-speech — 15 tests](#mlx-text-to-speech--15-tests)
+- [MLX language model — 39 tests](#mlx-language-model--39-tests)
+- [Voice assistant orchestration — 37 tests](#voice-assistant-orchestration--37-tests)
 - [Summary](#summary)
 
 ## Shared fixtures (`tests/conftest.py`)
@@ -29,7 +29,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `fake_mlx_lm` | Fake `mlx_lm.load` and `stream` | Makes LLM tests deterministic and independent of MLX model weights. |
 | `fake_mlx_audio` | Fake `mlx_audio.tts.utils.load_model` | Allows TTS service testing without loading an MLX audio model. |
 
-## Configuration models — 14 tests
+## Configuration models — 19 tests
 
 **File:** `tests/unit/test_config.py`
 
@@ -52,7 +52,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `TestAppConfig.test_independent_default_instances` | Nested defaults are not shared between instances. | Avoids cross-session mutation leaks. |
 | `TestAppConfig.test_override_nested_config` | A supplied nested LLM config overrides defaults. | Confirms CLI/application customization works. |
 
-## MLX compatibility — 5 tests
+## MLX compatibility — 8 tests
 
 **File:** `tests/unit/test_mlx_compat.py`
 
@@ -68,7 +68,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_patch_when_mlx_lm_absent` | Swallows the optional dependency import failure. | LocalTalk modules remain importable without MLX LM. |
 | `test_patch_creates_callable_alias` | The generated alias is callable and behaves like `save_model`. | Verifies functional compatibility, not just attribute presence. |
 
-## CLI — 34 tests
+## CLI — 40 tests
 
 **File:** `tests/unit/test_cli.py`
 
@@ -88,6 +88,10 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_show_reasoning_flag` | `--show-reasoning` enables reasoning display. | Makes the opt-in behavior reachable from the CLI. |
 | `test_show_reasoning_default_false` | Reasoning display defaults off. | Protects internal reasoning by default. |
 | `test_numeric_args` | Parses temperature, token limit, and top-p with correct values. | Generation tuning must reach typed config fields. |
+| `test_reasoning_choices` (3 cases) | Accepts `low`, `medium`, and `high`. | Exposes every supported reasoning effort. |
+| `test_invalid_reasoning_exits` | Rejects an unknown reasoning level. | Fails early on invalid effort. |
+| `test_main_maps_reasoning_effort` | Maps `--reasoning` into `MLXLMConfig`. | Ensures the flag actually reaches the model config. |
+| `test_main_reasoning_defaults_to_low` | No flag yields low effort. | Locks in the latency-first default for voice. |
 | `test_system_prompt_inline` | Parses an inline prompt. | Supports quick personality/instruction overrides. |
 | `test_system_prompt_file_flag` | Parses a prompt-file path. | Supports longer reusable prompts. |
 | `TestMain.test_main_creates_and_runs_assistant` | Constructs and runs `VoiceAssistant`. | Covers the normal CLI entry path. |
@@ -129,7 +133,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_vad_disabled_raises_on_manual` | Manual VAD wrapper rejects disabled VAD. | Applies the same safety at both entry points. |
 | `test_record_with_vad_delegates_to_auto` | The wrapper returns the automatic recorder result. | Protects delegation wiring. |
 
-## Waveform and automatic VAD — 18 tests
+## Waveform and automatic VAD — 23 tests
 
 **File:** `tests/unit/test_audio_vad_auto.py`
 
@@ -178,7 +182,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_transcribe_fp16_disabled` | Calls Whisper with `fp16=False`. | Keeps CPU transcription safe and compatible. |
 | `test_transcribe_propagates_exception` | Model errors propagate to the assistant layer. | Centralizes user-facing error handling in the orchestrator. |
 
-## MLX text-to-speech — 9 tests
+## MLX text-to-speech — 15 tests
 
 **File:** `tests/unit/test_mlx_tts.py`
 
@@ -197,14 +201,20 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_concatenates_multiple_results` | Joins generated pieces with 250 ms silence. | Prevents adjacent speech chunks from running together. |
 | `test_silence_duration_correct` | Silence length matches the configured default at sample rate. | Timing must scale correctly with sample rate. |
 | `test_long_form_mlx_array_conversion` | Converts MLX-like arrays in the long-form path. | Keeps both synthesis paths playback-ready. |
+| `test_patches_tqdm_in_loaded_modules` | Silencing replaces `tqdm` in imported chatterbox modules. | Progress bars must not render during synthesis. |
+| `test_ignores_modules_not_yet_imported` | Silencing never imports un-loaded modules. | Prevents import side effects from a cleanup helper. |
+| `test_load_model_applies_silencing` | Silencing runs right after model load. | Bars must be suppressed before any generation. |
+| `test_quiet_tqdm_yields_iterable_without_output` | The tqdm replacement passes iterables through silently. | Guarantees generation loops still work unwrapped. |
+| `test_synthesize_suppresses_model_prints` | Stray model prints do not reach stdout in `synthesize`. | Keeps the console clean during speech output. |
+| `test_synthesize_long_form_suppresses_model_prints` | Same suppression in the long-form path. | Both synthesis paths stay quiet. |
 
-## MLX language model — 30 tests
+## MLX language model — 39 tests
 
 **File:** `tests/unit/test_mlx_llm.py`
 
 **Source under test:** `src/localtalk/services/mlx_llm.py`
 
-**Coverage:** **73%**
+**Coverage:** **76%**
 
 | Test name | What it tests | Why it matters |
 |---|---|---|
@@ -236,10 +246,19 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_analysis_not_printed_by_default` | Analysis is hidden with default config. | Prevents terminal leakage. |
 | `test_commentary_printed_when_show_reasoning` | Commentary prints when explicitly enabled. | Verifies `show_reasoning` opt-in. |
 | `test_analysis_printed_when_show_reasoning` | Analysis prints when explicitly enabled. | Completes opt-in coverage for both reasoning channels. |
+| `test_fallback_not_saved_to_history` | The spoken fallback string is excluded from chat history. | Prevents the model from imitating its own error message on later turns. |
+| `test_retry_on_truncation_recovers` | A length-truncated generation retries once with a larger budget; the recovered turn is persisted. | gpt-oss reasoning can exhaust small budgets before the final answer; retry recovers it. |
+| `test_no_retry_when_finish_reason_stop` | No retry after a natural stop. | Avoids doubling latency/cost on genuine parse failures. |
+| `test_retry_exhausted_still_falls_back` | An exhausted retry falls back without saving history. | Guarantees bounded attempts and a clean history. |
+| `test_tool_call_updates_reasoning_effort` | A `set_reasoning_level` call updates the effort, re-renders the follow-up with it, and records the full exchange. | Mid-session reasoning control must actually take effect and stay coherent. |
+| `test_tool_call_invalid_level_rejected` | An invalid level leaves the effort unchanged and reports an error to the model. | Bad tool arguments must not corrupt service state. |
+| `test_tool_call_without_confirmation_uses_spoken_fallback` | A silent follow-up produces a spoken confirmation anyway. | Voice users always need audible feedback for a level change. |
+| `test_system_and_developer_rendered_every_turn` | System (effort) and developer (tools) messages precede history on every turn. | Mid-session effort changes and consistent persona both depend on this. |
+| `test_no_tool_call_leaves_effort_unchanged` | A normal turn generates once and keeps the configured effort. | Tool registration must not alter the normal path. |
 
 The generation test stubs use `_make_sampler` and `_make_logits_processors`, matching the current `mlx_lm` generation API.
 
-## Voice assistant orchestration — 35 tests
+## Voice assistant orchestration — 37 tests
 
 **File:** `tests/unit/test_assistant.py`
 
@@ -258,6 +277,7 @@ The generation test stubs use `_make_sampler` and `_make_logits_processors`, mat
 | `test_strips_thematic_break` | Retains surrounding text without the rule. | Decorative Markdown should be silent. |
 | `test_linebreak_becomes_newline` | Retains both lines. | Avoids dropping content during rendering. |
 | `test_text_passthrough` | Renderer returns raw text. | Base renderer behavior underpins all stripping. |
+| `test_runtime_services_use_interactive_console` | After quiet init, LLM and audio services get the interactive console. | Response text read-ahead, retry warnings, and reasoning updates must be visible at runtime. |
 | `test_emphasis_strips` | Renderer drops emphasis markup. | Prevents spoken punctuation. |
 | `test_strong_strips` | Renderer drops strong markup. | Same protection for bold text. |
 | `test_link_strips_url` | Renderer returns link label, not URL. | Long URLs sound poor in TTS. |
@@ -284,13 +304,13 @@ The generation test stubs use `_make_sampler` and `_make_logits_processors`, mat
 
 | Test file | Collected tests | Primary source | Coverage |
 |---|---:|---|---:|
-| `tests/unit/test_config.py` | 14 | `models/config.py` | 100% |
-| `tests/unit/test_mlx_compat.py` | 5 | `utils/mlx_compat.py` | 100% |
-| `tests/unit/test_cli.py` | 34 | `cli.py` | 93% |
+| `tests/unit/test_config.py` | 19 | `models/config.py` | 100% |
+| `tests/unit/test_mlx_compat.py` | 8 | `utils/mlx_compat.py` | 100% |
+| `tests/unit/test_cli.py` | 40 | `cli.py` | 93% |
 | `tests/unit/test_audio.py` | 12 | `services/audio.py` | 29% |
-| `tests/unit/test_audio_vad_auto.py` | 18 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
+| `tests/unit/test_audio_vad_auto.py` | 23 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
 | `tests/unit/test_speech_recognition.py` | 11 | `services/speech_recognition.py` | 67% |
-| `tests/unit/test_mlx_tts.py` | 9 | `services/mlx_tts.py` | 69% |
-| `tests/unit/test_mlx_llm.py` | 30 | `services/mlx_llm.py` | 73% |
-| `tests/unit/test_assistant.py` | 35 | `core/assistant.py` | 46% |
-| **Total** | **168** | | **62% overall** |
+| `tests/unit/test_mlx_tts.py` | 15 | `services/mlx_tts.py` | 69% |
+| `tests/unit/test_mlx_llm.py` | 39 | `services/mlx_llm.py` | 76% |
+| `tests/unit/test_assistant.py` | 37 | `core/assistant.py` | 46% |
+| **Total** | **204** | | **64% overall** |

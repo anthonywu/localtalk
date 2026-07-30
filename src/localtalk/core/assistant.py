@@ -1,6 +1,7 @@
 """Main voice assistant implementation."""
 
 import select
+import signal
 import sys
 import termios
 import threading
@@ -266,6 +267,11 @@ class VoiceAssistant:
             init_messages.append(f"🤖 Loading LLM: {self.config.mlx_lm.model}")
             live.update(create_panel())
             self.llm = MLXLanguageModelService(self.config.mlx_lm, self.config.system_prompt, quiet_console)
+            # Model loading stays inside the init panel, but runtime output —
+            # the response text (printed before TTS so users can read ahead),
+            # generation spinner, retry warnings, and reasoning-level updates —
+            # must render to the interactive console.
+            self.llm.console = self.console
             live.update(create_panel())
 
             # Text-to-speech setup based on backend
@@ -292,6 +298,9 @@ class VoiceAssistant:
             init_messages.append("🎤 Initializing audio service...")
             live.update(create_panel())
             self.audio = AudioService(self.config.audio, quiet_console)
+            # Initialization messages stay quiet, but recording status and the
+            # live microphone waveform must render to the interactive console.
+            self.audio.console = self.console
 
             # Check VAD status
             if self.config.audio.use_vad:
@@ -321,6 +330,12 @@ class VoiceAssistant:
             except Exception:
                 pass
 
+            # Reasoning level + hint that it can be changed by voice mid-session
+            init_messages.append(
+                f"🧠 Reasoning level: {self.config.mlx_lm.reasoning_effort.value} "
+                '(say "think harder" or "think faster" to change it anytime)'
+            )
+
             # Final update with all information
             init_messages.append("\n✅ Ready!")
             live.update(create_panel())
@@ -334,7 +349,7 @@ class VoiceAssistant:
             "✅ No tracking, no telemetry, no cloud APIs",
             "",
             "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
-            "[dim]💡 TIP: Disable progress bars with: export TQDM_DISABLE=1[/dim]",
+            '[dim]💡 TIP: Adjust thinking depth anytime — say "think harder", "think faster", or "use low/medium/high reasoning"[/dim]',
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
@@ -393,7 +408,8 @@ class VoiceAssistant:
                 tts_start = time.time()
 
             tts_text = _strip_markdown(response)
-            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
+            with self.console.status("[cyan]Synthesizing speech...[/cyan]", spinner="dots"):
+                sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
 
             if self.config.show_stats:
                 tts_time = time.time() - tts_start
@@ -471,7 +487,9 @@ class VoiceAssistant:
                         return
                     old_settings = termios.tcgetattr(fd)
                     try:
-                        tty.setraw(fd)
+                        # Keep terminal output processing enabled so Rich Live can
+                        # redraw in place while input remains character-at-a-time.
+                        tty.setcbreak(fd)
                         while not esc_pressed.is_set():
                             if _stdin_has_key(timeout=0.1):
                                 key = _read_key_raw()
@@ -572,6 +590,11 @@ class VoiceAssistant:
                 pass
         except KeyboardInterrupt:
             pass
+
+        # Ignore further Ctrl+C during shutdown so a second press (or a
+        # held key) doesn't surface an ugly ``threading._shutdown``
+        # traceback while the interpreter joins background threads.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         self.console.print("\n[red]Exiting...")
         self.console.print("[blue]Thank you for using Local Voice Assistant!")

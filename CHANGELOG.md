@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- LLM runtime output is no longer suppressed by the quiet init console: the response text now prints before TTS synthesis so users can read ahead, and the generation spinner, truncation-retry warnings, and reasoning-level change confirmations are visible too (same console-swap pattern as the audio service)
+
+## [0.5.0] - 2026-07-30
+
+### Added
+
+- Mid-session reasoning control via Harmony tool calling: the assistant exposes a `set_reasoning_level` tool, so asking it to "think harder" or "think faster" updates the reasoning effort for all following turns, confirmed with a spoken response
+- System and developer messages are now rendered on every turn instead of only the first: the system message carries the reasoning effort (required for mid-session changes), and this also keeps the persona instructions in context after turn 1
+- Harmony stop tokens (`<|call|>`, `<|return|>`) are registered with the tokenizer so generation halts cleanly after tool calls
+
+### Changed
+
+- Raise default `max_tokens` from 100 to 512: gpt-oss reasons in the Harmony analysis channel before answering, and 100 tokens frequently truncated generation before any final answer existed, surfacing the "I'm sorry, I couldn't produce a response" fallback
+- Default system prompts now instruct the model to answer directly and never apologize or claim it cannot respond
+- Default system prompts now require fully speakable output: abbreviations, acronyms, units, symbols, and numbers must be spelled out in their full spoken form (e.g., `feet` not `ft`) so TTS can narrate every response verbatim
+- Expose reasoning effort as a `--reasoning {low,medium,high}` CLI flag (default stays `low` for fastest voice responses); the startup panel now shows the current reasoning level and both the startup panel and privacy banner hint that it can be changed by voice mid-session
+
+### Fixed
+
+- Spurious "I'm sorry, I couldn't produce a response" turns: length-truncated generations (finish_reason `"length"`) with no parsed answer now retry once with a 4x token budget before falling back
+- History poisoning loop: the spoken fallback text is no longer persisted as an assistant message, which previously taught gpt-oss to imitate the apology on subsequent turns
+
 ## [0.4.0] - 2026-07-29
 
 ### Added
