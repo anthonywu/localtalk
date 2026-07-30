@@ -30,15 +30,53 @@ from localtalk.services.tools.browser import make_browser_tools
 from localtalk.services.tools.knowledge import make_acquire_knowledge_tool, make_query_knowledge_tool
 from localtalk.services.tools.online import ConnectivityCache, make_check_online_tool
 from localtalk.services.tools.reasoning import make_reasoning_tool, reasoning_effort_for
+from localtalk.services.tools.settings import (
+    make_set_browser_engine_tool,
+    make_set_browser_headed_tool,
+    make_set_generation_tool,
+    make_set_show_reasoning_tool,
+    make_set_stats_tool,
+    make_set_tts_tool,
+    make_set_vad_mode_tool,
+)
 from localtalk.services.tools.web import make_web_search_tool
+from localtalk.services.tools.web_toggle import make_set_web_tools_tool
+from localtalk.utils.console_ui import print_assistant_utterance
+
+_SETTINGS_PROMPT_ADDENDUM = (
+    "\n\nYou can change session settings mid-conversation with tools (same knobs as "
+    "startup flags): set_reasoning_level, set_web_tools, set_show_reasoning, set_stats, "
+    "set_tts, set_vad_mode, set_browser_engine, set_browser_headed, set_generation. "
+    "Use them when the user asks to change how you think, speak, listen, browse, or sample."
+)
 
 _WEB_PROMPT_ADDENDUM = (
-    "\n\nOnline tools are enabled (--enable-web). You may call web_search for current "
-    "or world facts when offline packs are insufficient, and browser_navigate / "
-    "browser_snapshot / browser_extract_text / browser_click / browser_type / "
-    "browser_close to drive a local browser. Prefer query_knowledge when a local pack "
-    "is installed. Call check_online if unsure about connectivity. Network use leaves "
-    "this machine — keep answers concise and spoken-friendly. Close the browser when done."
+    "\n\nOnline tools are currently ON. You MUST use them for live or current data — "
+    "do not refuse and do not say you cannot look something up online.\n"
+    "Tool choice:\n"
+    "- Encyclopedic / stable facts: prefer query_knowledge if a pack is installed, "
+    "else web_search (Wikipedia).\n"
+    "- Live or changing data (weather, news, sports scores, stock prices, 'today', "
+    "'right now'): do NOT rely on web_search alone. Use browser_navigate to a "
+    "suitable public page (for weather e.g. https://wttr.in/San_Francisco or a "
+    "weather.gov forecast page), then browser_extract_text, then answer from that "
+    "text. Close the browser when done.\n"
+    "If a tool fails, try another path (e.g. different URL) once; only then explain "
+    "what failed and offer to try again. Never invent live conditions. "
+    "Cite sources using the cite field when present. Keep answers concise and spoken. "
+    "If the user asks to go fully offline, call set_web_tools with enabled=false."
+)
+
+_WEB_OFF_PROMPT_ADDENDUM = (
+    "\n\nOnline tools are currently OFF (fully local). You still have check_online, "
+    "set_web_tools, acquire_knowledge, query_knowledge, and set_reasoning_level.\n"
+    "If the user asks for live or current data (weather, news, scores, prices, "
+    "'today', 'right now') or anything you cannot answer from offline packs or "
+    "general knowledge: do NOT refuse. Either (1) call set_web_tools with "
+    "enabled=true and then look it up with web_search or the browser, or (2) "
+    "briefly offer to turn online tools on — e.g. 'I can look that up online if "
+    "you want — say enable web.' Prefer (1) when the request clearly needs the net. "
+    "Do not invent search results or live data."
 )
 
 
@@ -55,6 +93,7 @@ class MLXLanguageModelService:
         browser_tools: BrowserToolsConfig | None = None,
         connectivity_cache: ConnectivityCache | None = None,
         browser_session: BrowserSession | None = None,
+        session_control: dict | None = None,
     ):
         self.config = config
         self.system_prompt = system_prompt
@@ -71,14 +110,92 @@ class MLXLanguageModelService:
             reachability_url=self.web_tools.reachability_url,
         )
         self.browser_session = browser_session
-        # --enable-web is the master switch for both web_search and browser tools
-        if self.web_tools.enabled:
-            self.browser_tools.enabled = True
-            if self.browser_session is None:
-                self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
+        # Optional hooks into VoiceAssistant for stats / TTS / VAD (set after init)
+        self.session_control: dict = session_control if session_control is not None else {}
+        self._sync_browser_session_to_web_flag()
         self.tool_registry = self._build_tool_registry()
         self._load_model()
         self._init_harmony()
+
+    def bind_session_control(self, control: dict) -> None:
+        """Attach assistant-owned setters and rebuild tools that depend on them."""
+        self.session_control = control
+        self.tool_registry = self._build_tool_registry()
+
+    def _sync_browser_session_to_web_flag(self) -> None:
+        """Keep browser session + flag aligned with web_tools.enabled."""
+        self.browser_tools.enabled = self.web_tools.enabled
+        if self.web_tools.enabled:
+            if self.browser_session is None:
+                self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
+        elif self.browser_session is not None:
+            self.browser_session.close()
+            self.browser_session = None
+
+    def set_web_tools_enabled(self, enabled: bool) -> dict:
+        """Enable or disable web_search + browser tools mid-session; rebuilds the registry."""
+        self.web_tools.enabled = bool(enabled)
+        self._sync_browser_session_to_web_flag()
+        self.tool_registry = self._build_tool_registry()
+        state = "on" if self.web_tools.enabled else "off"
+        self.console.print(f"[cyan]Online tools set to: {state}[/cyan]")
+        return {"ok": True, "web_tools_enabled": self.web_tools.enabled}
+
+    def set_show_reasoning(self, enabled: bool) -> dict:
+        self.config.show_reasoning = bool(enabled)
+        self.console.print(f"[cyan]Show reasoning set to: {self.config.show_reasoning}[/cyan]")
+        return {"ok": True, "show_reasoning": self.config.show_reasoning}
+
+    def set_browser_engine(self, engine: str) -> dict:
+        engine = engine.lower().strip()
+        if engine not in {"chrome", "safari"}:
+            return {"ok": False, "error": "engine must be chrome or safari"}
+        self.browser_tools.engine = engine  # type: ignore[assignment]
+        if self.browser_session is not None:
+            self.browser_session.close()
+            self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
+            self.tool_registry = self._build_tool_registry()
+        self.console.print(f"[cyan]Browser engine set to: {engine}[/cyan]")
+        return {"ok": True, "engine": engine}
+
+    def set_browser_headed(self, headed: bool) -> dict:
+        self.browser_tools.headed = bool(headed)
+        if self.browser_session is not None:
+            self.browser_session.close()
+            self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
+            self.tool_registry = self._build_tool_registry()
+        self.console.print(f"[cyan]Browser headed set to: {self.browser_tools.headed}[/cyan]")
+        return {"ok": True, "headed": self.browser_tools.headed}
+
+    def set_generation(
+        self,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict:
+        if temperature is not None:
+            if not 0.0 <= temperature <= 2.0:
+                return {"ok": False, "error": "temperature must be between 0 and 2"}
+            self.config.temperature = temperature
+        if top_p is not None:
+            if not 0.0 <= top_p <= 1.0:
+                return {"ok": False, "error": "top_p must be between 0 and 1"}
+            self.config.top_p = top_p
+        if max_tokens is not None:
+            if max_tokens < 1:
+                return {"ok": False, "error": "max_tokens must be >= 1"}
+            self.config.max_tokens = max_tokens
+        self.console.print(
+            f"[cyan]Generation: temperature={self.config.temperature}, "
+            f"top_p={self.config.top_p}, max_tokens={self.config.max_tokens}[/cyan]"
+        )
+        return {
+            "ok": True,
+            "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
+            "max_tokens": self.config.max_tokens,
+        }
 
     def _build_tool_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
@@ -89,6 +206,20 @@ class MLXLanguageModelService:
             return {"ok": True, "reasoning_effort": level}
 
         registry.register(make_reasoning_tool(set_effort))
+        registry.register(make_set_web_tools_tool(self.set_web_tools_enabled))
+        registry.register(make_set_show_reasoning_tool(self.set_show_reasoning))
+        registry.register(make_set_browser_engine_tool(self.set_browser_engine))
+        registry.register(make_set_browser_headed_tool(self.set_browser_headed))
+        registry.register(make_set_generation_tool(self.set_generation))
+
+        # Assistant-owned (bound after services init; stubs until then)
+        if (set_stats := self.session_control.get("set_stats")) is not None:
+            registry.register(make_set_stats_tool(set_stats))
+        if (set_tts := self.session_control.get("set_tts")) is not None:
+            registry.register(make_set_tts_tool(set_tts))
+        if (set_vad := self.session_control.get("set_vad_mode")) is not None:
+            registry.register(make_set_vad_mode_tool(set_vad))
+
         registry.register(make_acquire_knowledge_tool(self.knowledge_store, self.console.print))
         registry.register(make_query_knowledge_tool(self.knowledge_query, self.console.print))
         registry.register(make_check_online_tool(self.connectivity_cache))
@@ -108,9 +239,14 @@ class MLXLanguageModelService:
 
     def _developer_instructions(self) -> str:
         prompt = self.system_prompt
-        # Master switch: --enable-web enables web_search + browser tools together
-        if self.web_tools.enabled and _WEB_PROMPT_ADDENDUM.strip() not in prompt:
-            prompt = prompt + _WEB_PROMPT_ADDENDUM
+        if _SETTINGS_PROMPT_ADDENDUM.strip() not in prompt:
+            prompt = prompt + _SETTINGS_PROMPT_ADDENDUM
+        if self.web_tools.enabled:
+            if _WEB_PROMPT_ADDENDUM.strip() not in prompt:
+                prompt = prompt + _WEB_PROMPT_ADDENDUM
+        else:
+            if _WEB_OFF_PROMPT_ADDENDUM.strip() not in prompt:
+                prompt = prompt + _WEB_OFF_PROMPT_ADDENDUM
         return prompt
 
     def _max_tool_rounds(self) -> int:
@@ -122,6 +258,7 @@ class MLXLanguageModelService:
         """Release browser resources if any."""
         if self.browser_session is not None:
             self.browser_session.close()
+            self.browser_session = None
 
     def _load_model(self):
         """Load the MLX model and processor."""
@@ -413,7 +550,7 @@ class MLXLanguageModelService:
         tool_call = self._extract_function_tool_call(parsed_messages)
         if tool_call is not None:
             clean_response = self._run_tool_loop(text, session_id, history, tool_call, debug_mode)
-            self.console.print(f"[cyan]Assistant: {clean_response}")
+            print_assistant_utterance(self.console, clean_response)
             return clean_response
 
         if not clean_response and finish_reason == "length":
@@ -438,7 +575,7 @@ class MLXLanguageModelService:
             self.console.print("[yellow]No usable response generated; skipping history for this turn.[/yellow]")
             clean_response = "I'm sorry, I couldn't produce a response."
 
-        self.console.print(f"[cyan]Assistant: {clean_response}")
+        print_assistant_utterance(self.console, clean_response)
         return clean_response
 
     def clear_history(self, session_id: str = "default"):

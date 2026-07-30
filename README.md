@@ -4,7 +4,7 @@ A privacy-first voice assistant that runs entirely offline on Apple Silicon, per
 
 Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
 
-> **Status:** Alpha software (`0.5.0`). It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — but is not yet polished for general use. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+> **Status:** Alpha software (`0.6.0`). It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — but is not yet polished for general use. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
 
 ## Why This Project Exists
 
@@ -41,7 +41,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
 - 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
-- 🌐 **Opt-in Web Search**: Pass `--enable-web` for Wikipedia lookups; startup shows network status and whether online tools are active
+- 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
 - 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
 - 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
 - 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
@@ -199,10 +199,15 @@ localtalk
 - `--vad-threshold FLOAT`: VAD sensitivity (0.0-1.0, default: 0.5)
 - `--vad-min-speech-ms INT`: Minimum speech duration in ms (default: 250)
 
-**Online knowledge (opt-in):**
+**Online tools (web search + browser):**
 
-- `--enable-web`: Register the Wikipedia `web_search` tool (searches leave this machine; STT/LLM/TTS stay local)
+- Default **auto**: on when startup detects internet, off when offline
+- `--enable-web`: Force online tools on (even if the probe fails)
+- `--no-web`: Force online tools off at startup (still toggleable by voice)
 - `--skip-network-probe`: Skip the startup internet reachability probe
+- Mid-session: say "enable web" / "disable web", and other startup knobs via tools
+  (`set_web_tools`, `set_reasoning_level`, `set_tts`, `set_stats`, `set_vad_mode`,
+  `set_show_reasoning`, `set_browser_engine`, `set_browser_headed`, `set_generation`)
 
 **TTS & Output Options:**
 
@@ -401,9 +406,9 @@ Ask by voice, for example: “download offline Wikipedia” or “what knowledge
 
 Packs are resolved from the live Kiwix catalog at download time, then cached permanently under the path above (honors `XDG_CACHE_HOME` if set).
 
-### Online knowledge (opt-in)
+### Online tools (auto + voice toggle)
 
-By default LocalTalk stays offline-first. Pass `--enable-web` (or `LOCALTALK_ENABLE_WEB=1`) to register a Wikipedia `web_search` tool. Startup always probes connectivity (unless `--skip-network-probe`) and prints whether web search is available. Core STT/LLM/TTS still run locally; only explicit web lookups leave the machine. Use `check_online` anytime to ask about wifi/ethernet status.
+Startup probes connectivity (unless `--skip-network-probe`). **Default policy is auto:** if the Mac is reachable, `web_search` and local Playwright browser tools turn on; if offline, they stay off. Override with `--enable-web` / `--no-web` (or `LOCALTALK_ENABLE_WEB=1` / `0`). Mid-session, say **"enable web"** or **"disable web"** — the assistant calls `set_web_tools`. Core STT/LLM/TTS always stay local; only explicit online tool use leaves the machine.
 
 ### Other Planned Features
 

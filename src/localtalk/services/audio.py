@@ -9,6 +9,7 @@ import torch
 from rich.console import Console
 
 from localtalk.models.config import AudioConfig
+from localtalk.utils.console_ui import blank_line, print_stage
 from localtalk.utils.waveform import WAVEFORM_WIDTH, level_to_block
 
 
@@ -278,7 +279,8 @@ class AudioService:
         if np.abs(audio_array).max() > 1.0:
             audio_array = audio_array / np.abs(audio_array).max()
 
-        self.console.print("[cyan]🔊 Playing audio...")
+        blank_line(self.console)
+        print_stage(self.console, "🔊 Playing audio...", style="bold cyan")
 
         try:
             # Try to play with current default device

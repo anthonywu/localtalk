@@ -30,6 +30,7 @@ def _wire_tool_defaults(service, *, web_enabled: bool = False):
     service.web_tools = WebToolsConfig(enabled=web_enabled, max_tool_rounds=3)
     service.browser_tools = BrowserToolsConfig(enabled=web_enabled)
     service.browser_session = MagicMock(spec=BrowserSession) if web_enabled else None
+    service.session_control = {}
     service.connectivity_cache = ConnectivityCache(ttl_s=45.0)
     service.tool_registry = MLXLanguageModelService._build_tool_registry(service)
     return service
@@ -682,6 +683,7 @@ class TestReasoningToolCalls:
         dev_dump = rendered_msgs[1].content[0].model_dump()
         tool_names = [t["name"] for t in dev_dump["tools"]["functions"]["tools"]]
         assert "set_reasoning_level" in tool_names
+        assert "set_web_tools" in tool_names
         assert "acquire_knowledge" in tool_names
         assert "query_knowledge" in tool_names
         assert "check_online" in tool_names
@@ -689,8 +691,8 @@ class TestReasoningToolCalls:
         # History follows the system/developer messages
         assert rendered_msgs[2].author.role == Role.USER
 
-    def test_web_and_browser_tools_registered_when_enable_web(self, monkeypatch):
-        """--enable-web is the master switch for web_search + browser_* tools."""
+    def test_web_and_browser_tools_registered_when_enabled(self, monkeypatch):
+        """When web_tools.enabled is True, web_search + browser_* tools are registered."""
         from openai_harmony import Role
 
         service = self._make_service(web_enabled=True)
@@ -708,9 +710,46 @@ class TestReasoningToolCalls:
         assert "browser_navigate" in tool_names
         assert "browser_extract_text" in tool_names
         assert "browser_close" in tool_names
+        assert "set_web_tools" in tool_names
         assert Role.DEVELOPER == rendered_msgs[1].author.role
-        assert "Online tools are enabled" in rendered_msgs[1].content[0].instructions
+        assert "Online tools are currently ON" in rendered_msgs[1].content[0].instructions
         assert service._max_tool_rounds() == 12
+
+    def test_set_web_tools_toggle_mid_session(self, monkeypatch):
+        """set_web_tools enables/disables web tools and rebuilds the registry."""
+        service = self._make_service(web_enabled=False)
+        assert "web_search" not in service.tool_registry.names()
+        assert "set_web_tools" in service.tool_registry.names()
+
+        result = service.set_web_tools_enabled(True)
+        assert result["ok"] is True
+        assert result["web_tools_enabled"] is True
+        assert "web_search" in service.tool_registry.names()
+        assert "browser_navigate" in service.tool_registry.names()
+
+        result = service.set_web_tools_enabled(False)
+        assert result["web_tools_enabled"] is False
+        assert "web_search" not in service.tool_registry.names()
+        assert "set_web_tools" in service.tool_registry.names()
+
+    def test_set_web_tools_tool_call_roundtrip(self, monkeypatch, capsys):
+        service = self._make_service(web_enabled=False)
+        stop = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([stop]), iter([stop])])
+        self._patch_parsers(
+            monkeypatch,
+            [
+                [self._tool_call_msg({"enabled": True}, tool_name="set_web_tools")],
+                [self._final_msg("Online tools are on.")],
+            ],
+        )
+
+        result = service.generate_response("enable web please")
+
+        assert result == "Online tools are on."
+        assert service.web_tools.enabled is True
+        assert "web_search" in service.tool_registry.names()
+        assert "Online tools set to: on" in capsys.readouterr().out
 
     def test_no_tool_call_leaves_effort_unchanged(self, monkeypatch):
         from openai_harmony import ReasoningEffort

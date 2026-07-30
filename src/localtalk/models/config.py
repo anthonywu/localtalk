@@ -53,11 +53,22 @@ class ChatterBoxConfig(BaseModel):
 
 
 class WebToolsConfig(BaseModel):
-    """Optional online knowledge tools (off by default)."""
+    """Online tools (web_search + browser). Effective state is ``enabled``.
+
+    Startup policy:
+    - auto (default): enable when the Mac is reachable on the internet
+    - on: always enable (CLI --enable-web)
+    - off: always disable (CLI --no-web)
+    Mid-session: model can call set_web_tools to flip ``enabled``.
+    """
 
     enabled: bool = Field(
         default=False,
-        description="Register web_search when True (--enable-web; also enables browser_tools)",
+        description="Runtime switch: register web_search + browser tools when True",
+    )
+    policy: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description="Startup policy: auto from network reachability, or force on/off",
     )
     max_tool_rounds: int = Field(default=3, ge=1, le=8, description="Max Harmony tool rounds per user turn")
     search_max_results: int = Field(default=3, ge=1, le=5, description="Default web_search result count")
@@ -82,7 +93,7 @@ class BrowserToolsConfig(BaseModel):
 
     enabled: bool = Field(
         default=False,
-        description="Register browser_* tools when True (set with --enable-web alongside web_tools)",
+        description="Register browser_* tools when True (tracks web_tools.enabled)",
     )
     engine: Literal["chrome", "safari"] = Field(
         default="chrome",

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Online tools default to **auto**: enabled when startup detects internet reachability, off when offline (override with `--enable-web` / `--no-web`)
+- Mid-session `set_web_tools` Harmony tool lets the user say "enable web" / "disable web" without restarting
+- Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (model/whisper still require restart)
+
+## [0.6.0] - 2026-07-30
+
 ### Added
 
 - Offline knowledge acquisition via Harmony tool calling: the assistant exposes an `acquire_knowledge` tool that downloads Kiwix ZIM packs into `~/.cache/localtalk/knowledge` (default: Simple English Wikipedia without pictures; also Best of Wikipedia, Simple Wiktionary, and Physics)

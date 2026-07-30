@@ -91,6 +91,8 @@ class TestKnowledgeQueryService:
         assert result["hits"][0]["title"] == "Paris"
         assert result["hits"][0]["source"] == "offline"
         assert "Paris is a city" in result["hits"][0]["snippet"]
+        assert "Simple English Wikipedia" in result["cite"]
+        assert result["hits"][0]["citation"]["kind"] == "offline"
 
     def test_get_article(self, tmp_path):
         store = KnowledgeStore(cache_dir=tmp_path, console=Console())
@@ -119,3 +121,4 @@ class TestKnowledgeQueryService:
         assert result["ok"] is True
         assert result["title"] == "Paris"
         assert "Capital of France" in result["text"]
+        assert "Simple English Wikipedia" in result["cite"]

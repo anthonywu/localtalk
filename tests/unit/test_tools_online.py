@@ -93,17 +93,17 @@ class TestDetectConnectivity:
 class TestStatusFormatters:
     def test_startup_lines(self):
         online = NetworkStatus(online=True, reachable=True, primary="wifi")
-        assert "web search + browser" in format_network_status_line(online, web_enabled=True)
-        assert "--enable-web" in format_network_status_line(online, web_enabled=False)
+        assert "web search + browser tools on" in format_network_status_line(online, web_enabled=True)
+        assert "enable web" in format_network_status_line(online, web_enabled=False)
         offline = NetworkStatus(online=False, reachable=False, primary="none")
         assert "offline" in format_network_status_line(offline, web_enabled=False)
 
     def test_privacy_banner(self):
         online = NetworkStatus(online=True, reachable=True, primary="ethernet")
         web_on = "\n".join(format_privacy_banner_lines(online, web_enabled=True))
-        assert "Online tools enabled" in web_on
+        assert "Online tools on" in web_on
         web_off = "\n".join(format_privacy_banner_lines(online, web_enabled=False))
-        assert "--enable-web" in web_off
+        assert "enable web" in web_off
 
 
 class TestConnectivityCache:

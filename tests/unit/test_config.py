@@ -148,6 +148,7 @@ class TestAppConfig:
         assert isinstance(cfg.browser_tools, BrowserToolsConfig)
         assert cfg.browser_tools.enabled is False
         assert cfg.web_tools.enabled is False
+        assert cfg.web_tools.policy == "auto"
         assert cfg.web_tools.startup_probe is True
         assert cfg.session_id == "voice_assistant_session"
         assert cfg.tts_backend == "chatterbox"

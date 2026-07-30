@@ -198,17 +198,14 @@ def detect_connectivity(
 def format_network_status_line(status: NetworkStatus, *, web_enabled: bool) -> str:
     """Human-readable startup status line."""
     if not status.online and not status.reachable:
-        return "🌐 Network: offline — running fully local"
+        return "🌐 Network: offline — running fully local (online tools off)"
     medium = status.primary if status.primary != "none" else "network"
     if status.online and not status.reachable:
-        return f"🌐 Network: interface up ({medium}) but internet unreachable — online tools unavailable"
+        return f"🌐 Network: interface up ({medium}) but internet unreachable — online tools off"
     if status.reachable and web_enabled:
-        return f"🌐 Network: online via {medium} — web search + browser tools available"
+        return f"🌐 Network: online via {medium} — web search + browser tools on"
     if status.reachable and not web_enabled:
-        return (
-            f"🌐 Network: online via {medium} — online capabilities available "
-            "(pass --enable-web for web search + browser)"
-        )
+        return f'🌐 Network: online via {medium} — online tools off (say "enable web" anytime to turn them on)'
     return f"🌐 Network: online via {medium}"
 
 
@@ -219,20 +216,20 @@ def format_privacy_banner_lines(status: NetworkStatus, *, web_enabled: bool) -> 
             "✅ Everything runs 100% locally on your Mac",
             "✅ No tracking, no telemetry, no cloud APIs",
             "",
-            "[yellow]📵 TIP: You can stay offline — LocalTalk works without WiFi.",
+            '[yellow]📵 Offline — online tools stay off. Say "enable web" if you reconnect.',
         ]
     if web_enabled:
         return [
             "✅ Core STT, LLM, and TTS still run locally on your Mac",
-            "⚠️ Online tools enabled — web search and pages you browse leave this machine",
+            "⚠️ Online tools on (auto because you're online) — searches/browse leave this machine",
             "",
-            "[yellow]TIP: Omit --enable-web next time to keep everything fully local.",
+            '[yellow]TIP: Say "disable web" or "go fully offline" anytime, or start with --no-web.',
         ]
     return [
         "✅ Everything runs 100% locally on your Mac",
-        "✅ No tracking, no telemetry, no cloud APIs (online tools off)",
+        "✅ Online tools off (forced or toggled off)",
         "",
-        "[yellow]You're online, but online tools are off — pass --enable-web for web search + browser.",
+        '[yellow]You\'re online — say "enable web" to turn on web search + browser.',
     ]
 
 

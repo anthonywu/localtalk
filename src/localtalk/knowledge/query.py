@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from localtalk.knowledge.citation import attach_citations
 from localtalk.knowledge.packs import DEFAULT_PACK_ID, get_pack, pack_ids
 from localtalk.knowledge.store import InstalledPack, KnowledgeStore
 
@@ -107,9 +108,9 @@ class KnowledgeQueryService:
             }
 
         if action == "search":
-            return self.search(query, packs=installed, max_results=max_results)
+            return attach_citations(self.search(query, packs=installed, max_results=max_results))
         if action == "get":
-            return self.get(query, packs=installed)
+            return attach_citations(self.get(query, packs=installed))
         return {"ok": False, "error": f"unknown action {action!r}; expected 'search' or 'get'"}
 
     def _packs_for_query(self, pack_id: str | None) -> list[InstalledPack]:
@@ -208,6 +209,7 @@ class KnowledgeQueryService:
                 snippet = _truncate(html_to_text(raw), 280)
             except Exception:
                 pass
+            pack_meta = get_pack(pack.pack_id)
             hits.append(
                 {
                     "title": title,
@@ -215,6 +217,7 @@ class KnowledgeQueryService:
                     "snippet": snippet,
                     "source": "offline",
                     "pack_id": pack.pack_id,
+                    "source_label": pack_meta.title if pack_meta else pack.pack_id,
                 }
             )
         return hits
@@ -239,6 +242,7 @@ class KnowledgeQueryService:
                 item = entry.get_item()
                 raw = bytes(item.content).decode("utf-8", errors="replace")
                 text = _truncate(html_to_text(raw), self.max_chars)
+                pack_meta = get_pack(pack.pack_id)
                 return {
                     "ok": True,
                     "action": "get",
@@ -248,6 +252,7 @@ class KnowledgeQueryService:
                     "snippet": _truncate(text, 280),
                     "source": "offline",
                     "pack_id": pack.pack_id,
+                    "source_label": pack_meta.title if pack_meta else pack.pack_id,
                     "truncated": len(html_to_text(raw)) > self.max_chars,
                 }
             except RuntimeError as exc:

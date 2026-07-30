@@ -8,12 +8,14 @@ import re
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -29,6 +31,8 @@ _KIWIX_CATALOG_ENTRIES = "https://library.kiwix.org/catalog/v2/entries"
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 _USER_AGENT = "localtalk/0.5 (+https://github.com/anthonywu/localtalk)"
 _CHUNK_SIZE = 1024 * 1024
+
+AnnounceFn = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -63,9 +67,15 @@ def default_cache_dir() -> Path:
 class KnowledgeStore:
     """Manage offline knowledge pack downloads in the user cache."""
 
-    def __init__(self, cache_dir: Path | None = None, console: Console | None = None):
+    def __init__(
+        self,
+        cache_dir: Path | None = None,
+        console: Console | None = None,
+        announce: AnnounceFn | None = None,
+    ):
         self.cache_dir = (cache_dir or default_cache_dir()).expanduser()
         self.console = console or Console()
+        self.announce = announce
 
     def ensure_cache_dir(self) -> Path:
         """Create the cache directory if needed and return it."""
@@ -227,9 +237,24 @@ class KnowledgeStore:
 
         dest = self.cache_dir / resolved.filename
         partial = self.cache_dir / f"{resolved.filename}.partial"
+        announcement = pack.download_announcement()
         self.console.print(
-            f"[cyan]Downloading {pack.title} ({pack.approx_size_label}) to {dest}...[/cyan]"
+            Panel(
+                f"[bold]{pack.title}[/bold]\n"
+                f"Size: {pack.approx_size_label}\n"
+                f"Expected wait: {pack.approx_wait_label}\n"
+                f"Saving to: {dest}\n\n"
+                "[dim]Please wait — progress is shown below.[/dim]",
+                title="📥 Downloading offline knowledge pack",
+                style="cyan",
+                expand=False,
+            )
         )
+        if self.announce is not None:
+            try:
+                self.announce(announcement)
+            except Exception as exc:
+                self.console.print(f"[yellow]Warning: could not play download announcement: {exc}[/yellow]")
         try:
             self._download_file(resolved.url, partial, expected_size=resolved.size_bytes)
             partial.replace(dest)

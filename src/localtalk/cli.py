@@ -128,15 +128,22 @@ def parse_args():
         help="Minimum speech duration in milliseconds (default: 250)",
     )
 
-    # Online tools: web_search + local Playwright browser (same opt-in)
-    parser.add_argument(
+    # Online tools: web_search + local Playwright browser
+    # Default policy is auto (on when network is reachable). Override with flags.
+    web_group = parser.add_mutually_exclusive_group()
+    web_group.add_argument(
         "--enable-web",
         action="store_true",
         help=(
-            "Enable online tools: web_search (Wikipedia) and local Playwright browser "
-            "(navigate/snapshot/click/extract). Core STT/LLM/TTS stay local; network use "
-            "leaves this machine. Browser extra: uv pip install 'localtalk[browser]'"
+            "Force online tools on (web_search + browser) even if the network probe fails. "
+            "Default without this flag is auto: on when online, off when offline. "
+            "Browser extra: uv pip install 'localtalk[browser]'"
         ),
+    )
+    web_group.add_argument(
+        "--no-web",
+        action="store_true",
+        help='Force online tools off at startup (you can still say "enable web" mid-session)',
     )
     parser.add_argument(
         "--skip-network-probe",
@@ -148,14 +155,14 @@ def parse_args():
         choices=["chrome", "safari"],
         default="chrome",
         help=(
-            "Browser engine when --enable-web: chrome (system Google Chrome) or "
+            "Browser engine when online tools are on: chrome (system Google Chrome) or "
             "safari (Playwright WebKit). Default: chrome"
         ),
     )
     parser.add_argument(
         "--browser-headed",
         action="store_true",
-        help="With --enable-web, show the browser window (default is headless)",
+        help="When online tools are on, show the browser window (default is headless)",
     )
 
     return parser.parse_args()
@@ -259,10 +266,15 @@ def main():
     config.audio.vad_threshold = args.vad_threshold
     config.audio.vad_min_speech_duration_ms = args.vad_min_speech_ms
 
-    # Online tools: one flag enables web_search + browser tools together
-    if args.enable_web or os.environ.get("LOCALTALK_ENABLE_WEB") == "1":
-        config.web_tools.enabled = True
-        config.browser_tools.enabled = True
+    # Online tools policy: auto (default) | on | off
+    # Effective enabled is set after the startup network probe in VoiceAssistant.
+    env_web = os.environ.get("LOCALTALK_ENABLE_WEB")
+    if args.enable_web or env_web == "1":
+        config.web_tools.policy = "on"
+    elif args.no_web or env_web == "0":
+        config.web_tools.policy = "off"
+    else:
+        config.web_tools.policy = "auto"
     if args.skip_network_probe:
         config.web_tools.startup_probe = False
     config.browser_tools.engine = args.browser_engine

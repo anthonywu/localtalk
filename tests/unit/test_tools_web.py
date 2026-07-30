@@ -43,6 +43,8 @@ class TestWikipediaSearch:
         assert result["hits"][0]["title"] == "Paris"
         assert "capital of France" in result["hits"][0]["snippet"]
         assert result["hits"][0]["source"] == "web"
+        assert "English Wikipedia online" in result["cite"]
+        assert result["hits"][0]["citation"]["kind"] == "web"
 
 
 class TestWebSearchTool:

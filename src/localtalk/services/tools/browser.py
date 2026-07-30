@@ -91,7 +91,9 @@ def make_browser_tools(session: BrowserSession) -> list[ToolSpec]:
                 NAVIGATE,
                 (
                     "Open a public http(s) URL in the local browser (Chrome or Safari/WebKit). "
-                    "Call this before snapshot/click/type/extract. Blocks private/local URLs."
+                    "Call this before snapshot/click/type/extract. Blocks private/local URLs. "
+                    "Primary tool path for live data: weather (e.g. https://wttr.in/San_Francisco "
+                    "or weather.gov), news, scores, prices — then browser_extract_text."
                 ),
                 {
                     "type": "object",

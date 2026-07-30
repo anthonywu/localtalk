@@ -35,6 +35,7 @@ class TestParseArgs:
         assert args.system_prompt is None
         assert args.system_prompt_file is None
         assert args.enable_web is False
+        assert args.no_web is False
         assert args.skip_network_probe is False
 
     @pytest.mark.parametrize(
@@ -210,10 +211,20 @@ class TestMain:
         assert config.audio.vad_threshold == 0.7
         assert config.audio.vad_min_speech_duration_ms == 500
 
-    def test_main_enable_web(self):
+    def test_main_enable_web_sets_policy_on(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--enable-web"])
         config = mock_va_class.call_args[0][0]
-        assert config.web_tools.enabled is True
+        assert config.web_tools.policy == "on"
+
+    def test_main_no_web_sets_policy_off(self):
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--no-web"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "off"
+
+    def test_main_default_web_policy_auto(self):
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.web_tools.policy == "auto"
 
     def test_main_skip_network_probe(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--skip-network-probe"])

@@ -45,6 +45,14 @@ class TestKnowledgePacks:
         assert pack.recommended is True
         assert pack.flavour == "nopic"
 
+    def test_download_announcement_mentions_size_and_wait(self):
+        pack = get_pack(DEFAULT_PACK_ID)
+        assert pack is not None
+        msg = pack.download_announcement()
+        assert "Simple English Wikipedia" in msg
+        assert "1 gigabyte" in msg
+        assert "few minutes" in msg
+
     def test_catalog_includes_wiktionary_and_top(self):
         ids = pack_ids()
         assert "wikipedia_en_top_nopic" in ids
@@ -169,6 +177,37 @@ class TestKnowledgeStore:
         manifest = json.loads((tmp_path / f"{pack.id}.json").read_text(encoding="utf-8"))
         assert manifest["filename"] == resolved.filename
         assert manifest["source_url"] == resolved.url
+
+    def test_acquire_announces_before_download(self, tmp_path):
+        announcements: list[str] = []
+        store = KnowledgeStore(
+            cache_dir=tmp_path,
+            console=Console(),
+            announce=announcements.append,
+        )
+        pack = get_pack(DEFAULT_PACK_ID)
+        assert pack is not None
+        resolved = ResolvedDownload(
+            pack_id=pack.id,
+            filename="wikipedia_en-simple_all_nopic_2026-06.zim",
+            url="https://example.test/wiki.zim",
+            size_bytes=990000000,
+        )
+
+        def _fake_download(url, dest, expected_size=None):
+            assert announcements, "announce must run before download starts"
+            dest.write_bytes(b"zim")
+
+        with (
+            patch.object(store, "resolve_download", return_value=resolved),
+            patch.object(store, "_download_file", side_effect=_fake_download),
+        ):
+            result = store.acquire(pack.id)
+
+        assert result["ok"] is True
+        assert len(announcements) == 1
+        assert "Simple English Wikipedia" in announcements[0]
+        assert "few minutes" in announcements[0]
 
     def test_is_safe_zim_filename(self):
         assert is_safe_zim_filename("wikipedia_en-simple_all_nopic_2026-06.zim")

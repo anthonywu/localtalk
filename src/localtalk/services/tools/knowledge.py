@@ -55,7 +55,9 @@ def make_acquire_knowledge_tool(store: KnowledgeStore, console_print) -> ToolSpe
             "megabytes), wikipedia_en_physics_nopic (physics articles, about 300 "
             "megabytes). Pass pack='list' to list available packs and what is already "
             "installed. Packs are stored under ~/.cache/localtalk/knowledge and kept "
-            "for future sessions."
+            "for future sessions. Before a large download begins, LocalTalk automatically "
+            "tells the user the pack name, size, and expected wait — you do not need to "
+            "pre-announce the wait yourself."
         ),
         {
             "type": "object",
@@ -99,11 +101,13 @@ def make_query_knowledge_tool(query_service: KnowledgeQueryService, console_prin
             return "Sorry, I couldn't find that in the offline knowledge packs."
         if result.get("action") == "get" and result.get("text"):
             title = result.get("title") or "that article"
-            return f"I found an article about {title} in the offline knowledge pack."
+            cite = result.get("cite") or "According to the offline knowledge pack"
+            return f"{cite}, I found details about {title}."
         hits = result.get("hits") or []
         if hits:
             titles = ", ".join(h.get("title", "result") for h in hits[:3])
-            return f"I found these offline results: {titles}."
+            cite = result.get("cite") or "According to the offline knowledge packs"
+            return f"{cite}, I found these results: {titles}."
         return "I searched the offline knowledge packs but found no matching articles."
 
     pack_enum = [*pack_ids(), "all"]
@@ -115,7 +119,11 @@ def make_query_knowledge_tool(query_service: KnowledgeQueryService, console_prin
             "factual, school, dictionary, or encyclopedia questions when offline packs "
             "may help. action='search' returns matching titles; action='get' returns "
             "article text. If no packs are installed, tell the user and call "
-            f"acquire_knowledge (default {DEFAULT_PACK_ID}). Prefer search then get."
+            f"acquire_knowledge (default {DEFAULT_PACK_ID}). Prefer search then get. "
+            "When you answer from these results, you MUST cite the source in natural "
+            "spoken English using the cite / citation.spoken_prefix field from the tool "
+            "result (for example: 'According to Simple English Wikipedia, ...'). "
+            "Do not read URLs or pack ids aloud."
         ),
         {
             "type": "object",

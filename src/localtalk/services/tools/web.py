@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
+from localtalk.knowledge.citation import attach_citations
 from localtalk.services.tools.base import ToolSpec, build_tool_description
 from localtalk.services.tools.online import ConnectivityCache
 
@@ -48,7 +49,7 @@ def wikipedia_search(
             url = urls[idx] if idx < len(urls) else None
             snippet = ""
             try:
-                summary_url = _SUMMARY.format(title=quote(title.replace(" ", "_"), safe="()_") )
+                summary_url = _SUMMARY.format(title=quote(title.replace(" ", "_"), safe="()_"))
                 summary_resp = client.get(summary_url)
                 if summary_resp.status_code == 200:
                     payload = summary_resp.json()
@@ -61,18 +62,21 @@ def wikipedia_search(
                     "title": title,
                     "snippet": snippet,
                     "source": "web",
+                    "source_label": "English Wikipedia online",
                     "url": url,
                     "pack_id": None,
                 }
             )
 
-    return {
-        "ok": True,
-        "query": query,
-        "count": len(hits),
-        "hits": hits,
-        "backend": "wikipedia",
-    }
+    return attach_citations(
+        {
+            "ok": True,
+            "query": query,
+            "count": len(hits),
+            "hits": hits,
+            "backend": "wikipedia",
+        }
+    )
 
 
 def make_web_search_tool(
@@ -121,15 +125,18 @@ def make_web_search_tool(
         if not hits:
             return "I searched the web but didn't find a clear result."
         title = hits[0].get("title") or "a page"
-        return f"I found information online about {title}."
+        cite = result.get("cite") or "According to English Wikipedia online"
+        return f"{cite}, I found information about {title}."
 
     description = build_tool_description(
         TOOL_NAME,
         (
-            "Search the public web for current or world knowledge (Wikipedia backend). "
-            "Only available when the user launched LocalTalk with --enable-web. "
-            "Use for facts that may need an online lookup; prefer offline query_knowledge "
-            "when a local pack is installed. Returns short title/snippet results."
+            "Search English Wikipedia online for encyclopedic facts (people, places, "
+            "history, science). Prefer query_knowledge first when an offline pack is "
+            "installed. NOT for live data (weather, news, scores, prices) — for those "
+            "use browser_navigate + browser_extract_text instead. "
+            "When you answer from results, cite using the cite field. "
+            "Only registered when online tools are on."
         ),
         {
             "type": "object",
