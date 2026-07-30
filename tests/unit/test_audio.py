@@ -162,11 +162,11 @@ class TestPlayAudio:
         assert fake_sd.play.call_count >= 2
 
     def test_empty_audio_waits_without_error(self, fake_sd):
-        """Empty array still calls play/wait and does not crash."""
+        """Empty array is a no-op (no device play) and does not crash."""
         service = _make_audio_service(fake_sd)
-        service.play_audio(np.array([], dtype=np.float32), sample_rate=16000)
-        fake_sd.play.assert_called_once()
-        fake_sd.wait.assert_called()
+        ok = service.play_audio(np.array([], dtype=np.float32), sample_rate=16000)
+        assert ok is True
+        fake_sd.play.assert_not_called()
 
     def test_play_calls_wait(self, fake_sd):
         """Successful playback drains the stream via wait()."""
