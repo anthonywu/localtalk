@@ -29,7 +29,11 @@ class MLXLMConfig(BaseModel):
 
     model: str = Field(default="mlx-community/gpt-oss-20b-MXFP4-Q8", description="MLX model from Hugging Face Hub")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature for text generation")
-    max_tokens: int = Field(default=100, ge=1, description="Maximum tokens to generate")
+    max_tokens: int = Field(
+        default=512,
+        ge=1,
+        description="Maximum tokens to generate (reasoning models need headroom for analysis before the answer)",
+    )
     top_p: float = Field(default=1.0, ge=0.0, le=1.0, description="Top-p sampling parameter")
     repetition_penalty: float = Field(default=1.0, ge=0.1, le=10.0, description="Repetition penalty")
     repetition_context_size: int = Field(default=20, ge=1, description="Context size for repetition penalty")
@@ -91,7 +95,7 @@ class AppConfig(BaseModel):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     session_id: str = Field(default="voice_assistant_session", description="Session ID for conversation history")
     system_prompt: str = Field(
-        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user.",
+        default="You are a helpful and friendly AI assistant. You are polite, respectful, and aim to provide concise responses of less than 20 words. You are aware of the current date and time and can use this information when relevant to help the user. Answer every question directly; never apologize or claim you cannot respond.",
         description="System prompt for the LLM",
     )
     tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")

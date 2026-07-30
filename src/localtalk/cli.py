@@ -58,8 +58,8 @@ def parse_args():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=100,
-        help="Maximum tokens to generate (default: 100)",
+        default=512,
+        help="Maximum tokens to generate (default: 512; reasoning models need headroom for analysis before the answer)",
     )
 
     # System prompt

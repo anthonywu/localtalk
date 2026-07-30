@@ -138,6 +138,103 @@ class MLXLanguageModelService:
             self.console.print(f"[red]Error saving audio to temp file: {e}")
             raise OSError(f"Failed to save audio to temporary file: {e}") from e
 
+    def _stream_tokens(self, prompt_tokens: list[int], max_tokens: int) -> tuple[list[int], str | None]:
+        """Stream raw token IDs from the model along with the finish reason.
+
+        Raw tokens are collected (rather than decoded text) so that Harmony
+        special tokens and channel boundaries are preserved for parsing.
+
+        Returns:
+            Tuple of (generated token IDs, finish reason: "stop", "length", or None).
+        """
+        # Build sampler and logits processors using the mlx_lm API
+        sampler = self._make_sampler(
+            temp=self.config.temperature,
+            top_p=self.config.top_p,
+        )
+        logits_processors = self._make_logits_processors(
+            repetition_penalty=self.config.repetition_penalty,
+            repetition_context_size=self.config.repetition_context_size,
+        )
+
+        generated_tokens: list[int] = []
+        finish_reason: str | None = None
+        with self.console.status("Generating response...", spinner="dots"):
+            for response in self.stream_generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt_tokens,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
+            ):
+                generated_tokens.append(response.token)
+                if response.finish_reason is not None:
+                    finish_reason = response.finish_reason
+        return generated_tokens, finish_reason
+
+    def _parse_response(self, generated_tokens: list[int], debug_mode: bool) -> str:
+        """Parse generated tokens into the user-facing response text.
+
+        Extracts the Harmony "final" channel, falling back to the last
+        non-reasoning channel. Returns an empty string when no usable
+        user-facing content was produced — e.g. when generation was
+        truncated while still in the analysis channel.
+        """
+        if debug_mode:
+            raw_text = self.harmony.decode(generated_tokens)
+            self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
+            self.console.print(f"[dim]{raw_text!r}[/dim]")
+
+        # Parse the raw tokens using Harmony StreamableParser
+        parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
+        for tok in generated_tokens:
+            parser.process(tok)
+        try:
+            parser.process_eos()
+        except Exception:
+            pass  # EOS processing may fail if response is truncated
+
+        parsed_messages = parser.messages
+
+        if debug_mode:
+            self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
+
+        # Log all channels for debugging, extract "final" for response
+        clean_response = ""
+        for msg in parsed_messages:
+            # Extract text content from message
+            msg_text = ""
+            for content in msg.content:
+                if hasattr(content, "text"):
+                    msg_text = content.text.strip()
+                    break
+
+            channel = msg.channel or "(no channel)"
+            if debug_mode:
+                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {msg_text}")
+
+            if msg.channel == "final":
+                clean_response = msg_text
+            elif msg.channel in ("analysis", "commentary"):
+                # Only show reasoning channels if explicitly enabled
+                if debug_mode or self.config.show_reasoning:
+                    self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
+
+        # Fallback: if no "final" channel found, use last non-reasoning message content
+        if not clean_response and parsed_messages:
+            for msg in reversed(parsed_messages):
+                if msg.channel in ("analysis", "commentary"):
+                    continue
+                for content in msg.content:
+                    if hasattr(content, "text") and content.text.strip():
+                        clean_response = content.text.strip()
+                        break
+                if clean_response:
+                    break
+
+        return clean_response
+
     def generate_response(
         self,
         text: str,
@@ -208,29 +305,9 @@ class MLXLanguageModelService:
         conversation = Conversation.from_messages(messages)
         prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
 
-        # Generate response using stream_generate to collect raw tokens
-        # This preserves special tokens that would be lost in decoded text
-        # Build sampler and logits processors using the mlx_lm API
-        sampler = self._make_sampler(
-            temp=self.config.temperature,
-            top_p=self.config.top_p,
-        )
-        logits_processors = self._make_logits_processors(
-            repetition_penalty=self.config.repetition_penalty,
-            repetition_context_size=self.config.repetition_context_size,
-        )
+        debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
 
-        generated_tokens: list[int] = []
-        with self.console.status("Generating response...", spinner="dots"):
-            for response in self.stream_generate(
-                self.model,
-                self.tokenizer,
-                prompt=prompt_tokens,
-                max_tokens=self.config.max_tokens,
-                sampler=sampler,
-                logits_processors=logits_processors,
-            ):
-                generated_tokens.append(response.token)
+        generated_tokens, finish_reason = self._stream_tokens(prompt_tokens, self.config.max_tokens)
 
         # Clean up temporary audio files
         for audio_file in audio_files:
@@ -239,76 +316,40 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
-        debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
+        clean_response = self._parse_response(generated_tokens, debug_mode)
 
-        if debug_mode:
-            raw_text = self.harmony.decode(generated_tokens)
-            self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
-            self.console.print(f"[dim]{raw_text!r}[/dim]")
+        # gpt-oss reasons in the analysis channel before answering, so a
+        # length-truncated generation can end before any "final" content exists.
+        # Retry once with a larger token budget to let the answer complete.
+        if not clean_response and finish_reason == "length":
+            retry_max_tokens = max(self.config.max_tokens * 4, 512)
+            self.console.print(
+                f"[yellow]Generation hit the {self.config.max_tokens}-token limit before "
+                f"producing an answer. Retrying with up to {retry_max_tokens} tokens...[/yellow]"
+            )
+            generated_tokens, _ = self._stream_tokens(prompt_tokens, retry_max_tokens)
+            clean_response = self._parse_response(generated_tokens, debug_mode)
 
-        # Parse the raw tokens using Harmony StreamableParser
-        parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
-        for tok in generated_tokens:
-            parser.process(tok)
-        try:
-            parser.process_eos()
-        except Exception:
-            pass  # EOS processing may fail if response is truncated
+        if clean_response:
+            # Update conversation history with Message objects
+            history.append(Message.from_role_and_content(Role.USER, text))
+            history.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
 
-        parsed_messages = parser.messages
-
-        if debug_mode:
-            self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
-
-        # Log all channels for debugging, extract "final" for response
-        clean_response = ""
-        for msg in parsed_messages:
-            # Extract text content from message
-            msg_text = ""
-            for content in msg.content:
-                if hasattr(content, "text"):
-                    msg_text = content.text.strip()
-                    break
-
-            channel = msg.channel or "(no channel)"
-            if debug_mode:
-                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {msg_text}")
-
-            if msg.channel == "final":
-                clean_response = msg_text
-            elif msg.channel in ("analysis", "commentary"):
-                # Only show reasoning channels if explicitly enabled
-                if debug_mode or self.config.show_reasoning:
-                    self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
-
-        # Fallback: if no "final" channel found, use last non-reasoning message content
-        if not clean_response and parsed_messages:
-            for msg in reversed(parsed_messages):
-                if msg.channel in ("analysis", "commentary"):
-                    continue
-                for content in msg.content:
-                    if hasattr(content, "text") and content.text.strip():
-                        clean_response = content.text.strip()
-                        break
-                if clean_response:
-                    break
-
-        # Safe fallback: if no final/non-reasoning content was parsed, do not
-        # return raw decoded tokens (which may contain reasoning/channel markup)
-        # to TTS — use a neutral spoken fallback instead.
-        if not clean_response:
-            clean_response = "I'm sorry, I couldn't produce a response."
-
-        # Update conversation history with Message objects
-        history.append(Message.from_role_and_content(Role.USER, text))
-        history.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
-
-        # Keep only recent history
-        max_msgs = self.config.history_max_messages
-        if len(history) > max_msgs:
-            self.chat_history[session_id] = history[-max_msgs:]
+            # Keep only recent history
+            max_msgs = self.config.history_max_messages
+            if len(history) > max_msgs:
+                self.chat_history[session_id] = history[-max_msgs:]
+            else:
+                self.chat_history[session_id] = history
         else:
-            self.chat_history[session_id] = history
+            # Safe fallback: if no final/non-reasoning content was parsed, do not
+            # return raw decoded tokens (which may contain reasoning/channel markup)
+            # to TTS — use a neutral spoken fallback instead. The failed turn is
+            # deliberately NOT saved to history: persisting the fallback text as an
+            # assistant message would teach the model to imitate the apology on
+            # later turns.
+            self.console.print("[yellow]No usable response generated; skipping history for this turn.[/yellow]")
+            clean_response = "I'm sorry, I couldn't produce a response."
 
         self.console.print(f"[cyan]Assistant: {clean_response}")
         return clean_response

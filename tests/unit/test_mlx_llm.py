@@ -226,6 +226,9 @@ class TestGenerateResponse:
         assert "test_session" in service.chat_history
 
     def test_generate_appends_to_history(self, mock_parser):
+        from openai_harmony import Message, Role
+
+        mock_parser.messages = [Message.from_role_and_content(Role.ASSISTANT, "Hi there!").with_channel("final")]
         service = self._make_service()
         service.generate_response("hello", session_id="test_session")
         history = service.chat_history["test_session"]
@@ -233,10 +236,11 @@ class TestGenerateResponse:
         assert len(history) == 2
 
     def test_generate_truncates_history_over_20(self, mock_parser):
-        service = self._make_service()
-        # Pre-fill with 18 Message mocks using real Message objects
         from openai_harmony import Message, Role
 
+        mock_parser.messages = [Message.from_role_and_content(Role.ASSISTANT, "reply").with_channel("final")]
+        service = self._make_service()
+        # Pre-fill with 18 Message mocks using real Message objects
         for i in range(18):
             service.chat_history.setdefault("default", []).append(Message.from_role_and_content(Role.USER, f"msg{i}"))
 
@@ -260,6 +264,9 @@ class TestGenerateResponse:
         assert isinstance(result, str)
 
     def test_clear_history_after_generate(self, mock_parser):
+        from openai_harmony import Message, Role
+
+        mock_parser.messages = [Message.from_role_and_content(Role.ASSISTANT, "Hi!").with_channel("final")]
         service = self._make_service()
         service.generate_response("hello", session_id="s1")
         assert len(service.chat_history["s1"]) == 2
@@ -388,3 +395,113 @@ class TestReasoningChannelFiltering:
         service.generate_response("hi")
         out = capsys.readouterr().out
         assert "visible thinking" in out
+
+
+# ────────────────────────── fallback + retry behavior ──────────────────────────
+
+
+class TestFallbackAndRetry:
+    """Truncation retry and history-poisoning guards for empty parses."""
+
+    def _make_service(self):
+        from openai_harmony import ReasoningEffort
+
+        from localtalk.services.mlx_llm import MLXLanguageModelService
+
+        config = MLXLMConfig(max_tokens=50)
+        service = MLXLanguageModelService.__new__(MLXLanguageModelService)
+        service.config = config
+        service.console = Console()
+        service.system_prompt = "test prompt"
+        service.chat_history = {}
+        service.reasoning_effort = ReasoningEffort.LOW
+        service.model = MagicMock()
+        service.tokenizer = MagicMock()
+        service.stream_generate = MagicMock(return_value=iter([]))
+        service._make_sampler = MagicMock(return_value=MagicMock())
+        service._make_logits_processors = MagicMock(return_value=None)
+        service.harmony = MagicMock()
+        service.harmony.render_conversation_for_completion.return_value = [1, 2, 3]
+        service.harmony.decode.return_value = "decoded"
+        return service
+
+    @staticmethod
+    def _patch_parsers(monkeypatch, message_lists):
+        """Patch StreamableParser so each instantiation pops the next canned result."""
+        queue = list(message_lists)
+
+        class _StubParser:
+            def __init__(self, *a, **kw):
+                self.messages = queue.pop(0) if queue else []
+
+            def process(self, tok):
+                pass
+
+            def process_eos(self):
+                pass
+
+        monkeypatch.setattr("localtalk.services.mlx_llm.StreamableParser", _StubParser)
+        monkeypatch.setattr(
+            "localtalk.services.mlx_llm.Conversation.from_messages",
+            MagicMock(return_value=MagicMock()),
+        )
+
+    @staticmethod
+    def _final_msg(text: str):
+        from openai_harmony import Message, Role
+
+        return Message.from_role_and_content(Role.ASSISTANT, text).with_channel("final")
+
+    def test_fallback_not_saved_to_history(self, monkeypatch):
+        """The hard-coded spoken fallback must never enter chat history."""
+        service = self._make_service()
+        self._patch_parsers(monkeypatch, [[]])
+
+        result = service.generate_response("hello", session_id="s1")
+
+        assert result == "I'm sorry, I couldn't produce a response."
+        assert service.chat_history["s1"] == []
+
+    def test_retry_on_truncation_recovers(self, monkeypatch):
+        """Length-truncated output with no answer retries with a larger budget."""
+        service = self._make_service()
+        truncated = MagicMock(token=10, finish_reason="length")
+        completed = MagicMock(token=11, finish_reason="stop")
+        service.stream_generate = MagicMock(side_effect=[iter([truncated]), iter([completed])])
+        self._patch_parsers(monkeypatch, [[], [self._final_msg("recovered answer")]])
+
+        result = service.generate_response("hello")
+
+        assert result == "recovered answer"
+        assert service.stream_generate.call_count == 2
+        first_budget = service.stream_generate.call_args_list[0][1]["max_tokens"]
+        retry_budget = service.stream_generate.call_args_list[1][1]["max_tokens"]
+        assert first_budget == 50
+        assert retry_budget > first_budget
+        # Recovered turn is persisted to history normally
+        assert len(service.chat_history["default"]) == 2
+
+    def test_no_retry_when_finish_reason_stop(self, monkeypatch):
+        """A naturally finished but unparseable generation must not retry."""
+        service = self._make_service()
+        stopped = MagicMock(token=10, finish_reason="stop")
+        service.stream_generate = MagicMock(return_value=iter([stopped]))
+        self._patch_parsers(monkeypatch, [[]])
+
+        result = service.generate_response("hello")
+
+        assert result == "I'm sorry, I couldn't produce a response."
+        assert service.stream_generate.call_count == 1
+
+    def test_retry_exhausted_still_falls_back(self, monkeypatch):
+        """If the retry also yields nothing, fall back without saving history."""
+        service = self._make_service()
+        truncated = MagicMock(token=10, finish_reason="length")
+        service.stream_generate = MagicMock(side_effect=[iter([truncated]), iter([truncated])])
+        self._patch_parsers(monkeypatch, [[], []])
+
+        result = service.generate_response("hello")
+
+        assert result == "I'm sorry, I couldn't produce a response."
+        assert service.stream_generate.call_count == 2
+        assert service.chat_history["default"] == []

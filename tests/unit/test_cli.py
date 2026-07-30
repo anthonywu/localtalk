@@ -24,7 +24,7 @@ class TestParseArgs:
         assert args.whisper_model == "turbo"
         assert args.temperature == 0.7
         assert args.top_p == 1.0
-        assert args.max_tokens == 100
+        assert args.max_tokens == 512
         assert args.no_tts is False
         assert args.stats is False
         assert args.test_mic is False

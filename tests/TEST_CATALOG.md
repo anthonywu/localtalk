@@ -1,21 +1,21 @@
 # Test Catalog — LocalTalk Unit Test Suite
 
-> **168 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **62% overall**.
+> **186 tests** across **9 test files**, plus one shared `conftest.py`. The suite runs offline with ML models and audio I/O mocked. Current measured coverage is **64% overall**.
 >
 > Counts include parametrized cases. Coverage values below come from `uv run pytest --cov-report=term-missing`.
 
 ## Table of contents
 
 - [Shared fixtures](#shared-fixtures-testsconftestpy)
-- [Configuration models — 14 tests](#configuration-models--14-tests)
-- [MLX compatibility — 5 tests](#mlx-compatibility--5-tests)
+- [Configuration models — 19 tests](#configuration-models--19-tests)
+- [MLX compatibility — 8 tests](#mlx-compatibility--8-tests)
 - [CLI — 34 tests](#cli--34-tests)
 - [Audio service — 12 tests](#audio-service--12-tests)
-- [Waveform and automatic VAD — 18 tests](#waveform-and-automatic-vad--18-tests)
+- [Waveform and automatic VAD — 23 tests](#waveform-and-automatic-vad--23-tests)
 - [Whisper speech recognition — 11 tests](#whisper-speech-recognition--11-tests)
 - [MLX text-to-speech — 9 tests](#mlx-text-to-speech--9-tests)
-- [MLX language model — 30 tests](#mlx-language-model--30-tests)
-- [Voice assistant orchestration — 35 tests](#voice-assistant-orchestration--35-tests)
+- [MLX language model — 34 tests](#mlx-language-model--34-tests)
+- [Voice assistant orchestration — 36 tests](#voice-assistant-orchestration--36-tests)
 - [Summary](#summary)
 
 ## Shared fixtures (`tests/conftest.py`)
@@ -29,7 +29,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `fake_mlx_lm` | Fake `mlx_lm.load` and `stream` | Makes LLM tests deterministic and independent of MLX model weights. |
 | `fake_mlx_audio` | Fake `mlx_audio.tts.utils.load_model` | Allows TTS service testing without loading an MLX audio model. |
 
-## Configuration models — 14 tests
+## Configuration models — 19 tests
 
 **File:** `tests/unit/test_config.py`
 
@@ -52,7 +52,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `TestAppConfig.test_independent_default_instances` | Nested defaults are not shared between instances. | Avoids cross-session mutation leaks. |
 | `TestAppConfig.test_override_nested_config` | A supplied nested LLM config overrides defaults. | Confirms CLI/application customization works. |
 
-## MLX compatibility — 5 tests
+## MLX compatibility — 8 tests
 
 **File:** `tests/unit/test_mlx_compat.py`
 
@@ -129,7 +129,7 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_vad_disabled_raises_on_manual` | Manual VAD wrapper rejects disabled VAD. | Applies the same safety at both entry points. |
 | `test_record_with_vad_delegates_to_auto` | The wrapper returns the automatic recorder result. | Protects delegation wiring. |
 
-## Waveform and automatic VAD — 18 tests
+## Waveform and automatic VAD — 23 tests
 
 **File:** `tests/unit/test_audio_vad_auto.py`
 
@@ -198,13 +198,13 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_silence_duration_correct` | Silence length matches the configured default at sample rate. | Timing must scale correctly with sample rate. |
 | `test_long_form_mlx_array_conversion` | Converts MLX-like arrays in the long-form path. | Keeps both synthesis paths playback-ready. |
 
-## MLX language model — 30 tests
+## MLX language model — 34 tests
 
 **File:** `tests/unit/test_mlx_llm.py`
 
 **Source under test:** `src/localtalk/services/mlx_llm.py`
 
-**Coverage:** **73%**
+**Coverage:** **76%**
 
 | Test name | What it tests | Why it matters |
 |---|---|---|
@@ -236,10 +236,14 @@ These fixtures inject lightweight modules into `sys.modules`, allowing service t
 | `test_analysis_not_printed_by_default` | Analysis is hidden with default config. | Prevents terminal leakage. |
 | `test_commentary_printed_when_show_reasoning` | Commentary prints when explicitly enabled. | Verifies `show_reasoning` opt-in. |
 | `test_analysis_printed_when_show_reasoning` | Analysis prints when explicitly enabled. | Completes opt-in coverage for both reasoning channels. |
+| `test_fallback_not_saved_to_history` | The spoken fallback string is excluded from chat history. | Prevents the model from imitating its own error message on later turns. |
+| `test_retry_on_truncation_recovers` | A length-truncated generation retries once with a larger budget; the recovered turn is persisted. | gpt-oss reasoning can exhaust small budgets before the final answer; retry recovers it. |
+| `test_no_retry_when_finish_reason_stop` | No retry after a natural stop. | Avoids doubling latency/cost on genuine parse failures. |
+| `test_retry_exhausted_still_falls_back` | An exhausted retry falls back without saving history. | Guarantees bounded attempts and a clean history. |
 
 The generation test stubs use `_make_sampler` and `_make_logits_processors`, matching the current `mlx_lm` generation API.
 
-## Voice assistant orchestration — 35 tests
+## Voice assistant orchestration — 36 tests
 
 **File:** `tests/unit/test_assistant.py`
 
@@ -284,13 +288,13 @@ The generation test stubs use `_make_sampler` and `_make_logits_processors`, mat
 
 | Test file | Collected tests | Primary source | Coverage |
 |---|---:|---|---:|
-| `tests/unit/test_config.py` | 14 | `models/config.py` | 100% |
-| `tests/unit/test_mlx_compat.py` | 5 | `utils/mlx_compat.py` | 100% |
+| `tests/unit/test_config.py` | 19 | `models/config.py` | 100% |
+| `tests/unit/test_mlx_compat.py` | 8 | `utils/mlx_compat.py` | 100% |
 | `tests/unit/test_cli.py` | 34 | `cli.py` | 93% |
 | `tests/unit/test_audio.py` | 12 | `services/audio.py` | 29% |
-| `tests/unit/test_audio_vad_auto.py` | 18 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
+| `tests/unit/test_audio_vad_auto.py` | 23 | `utils/waveform.py`; `services/audio_vad_auto.py` | 100%; 85% |
 | `tests/unit/test_speech_recognition.py` | 11 | `services/speech_recognition.py` | 67% |
 | `tests/unit/test_mlx_tts.py` | 9 | `services/mlx_tts.py` | 69% |
-| `tests/unit/test_mlx_llm.py` | 30 | `services/mlx_llm.py` | 73% |
-| `tests/unit/test_assistant.py` | 35 | `core/assistant.py` | 46% |
-| **Total** | **168** | | **62% overall** |
+| `tests/unit/test_mlx_llm.py` | 34 | `services/mlx_llm.py` | 76% |
+| `tests/unit/test_assistant.py` | 36 | `core/assistant.py` | 46% |
+| **Total** | **186** | | **64% overall** |

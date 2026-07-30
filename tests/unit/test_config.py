@@ -56,7 +56,7 @@ class TestMLXLMConfig:
         cfg = MLXLMConfig()
         assert cfg.model == "mlx-community/gpt-oss-20b-MXFP4-Q8"
         assert cfg.temperature == 0.7
-        assert cfg.max_tokens == 100
+        assert cfg.max_tokens == 512
         assert cfg.top_p == 1.0
         assert cfg.repetition_penalty == 1.0
         assert cfg.repetition_context_size == 20
@@ -104,7 +104,7 @@ class TestAudioConfig:
         assert cfg.vad_speech_pad_ms == 400
         assert cfg.vad_post_speech_silence_seconds == 2.0
         assert cfg.vad_max_recording_seconds == 120
-        assert cfg.vad_initial_wait_seconds == 6.0
+        assert cfg.vad_initial_wait_seconds == 15.0
 
     def test_vad_validation_rejects_wrong_sample_rate(self):
         """Silero VAD requires 16kHz sample rate."""

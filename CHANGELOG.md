@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Raise default `max_tokens` from 100 to 512: gpt-oss reasons in the Harmony analysis channel before answering, and 100 tokens frequently truncated generation before any final answer existed, surfacing the "I'm sorry, I couldn't produce a response" fallback
+- Default system prompts now instruct the model to answer directly and never apologize or claim it cannot respond
+
+### Fixed
+
+- Spurious "I'm sorry, I couldn't produce a response" turns: length-truncated generations (finish_reason `"length"`) with no parsed answer now retry once with a 4x token budget before falling back
+- History poisoning loop: the spoken fallback text is no longer persisted as an assistant message, which previously taught gpt-oss to imitate the apology on subsequent turns
+
 ## [0.4.0] - 2026-07-29
 
 ### Added
