@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bump build backend requirement to `uv_build>=0.12.0,<0.13.0` (matches uv 0.12.0) and document the single-command `uv publish` release workflow using `uv auth login` stored credentials
+
 ### Fixed
 
 - LLM runtime output is no longer suppressed by the quiet init console: the response text now prints before TTS synthesis so users can read ahead, and the generation spinner, truncation-retry warnings, and reasoning-level change confirmations are visible too (same console-swap pattern as the audio service)

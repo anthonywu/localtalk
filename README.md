@@ -332,6 +332,24 @@ ruff format
 ruff check --fix
 ```
 
+### Publishing to PyPI
+
+Releases are built and uploaded with `uv`. Authenticate once with a PyPI API token (stored in your system keyring, never in shell history):
+
+```bash
+uv auth login upload.pypi.org --token pypi-XXXXXXXX
+```
+
+Then each release is a single command — `uv publish` reads the stored token and uses `__token__` as the username automatically:
+
+```bash
+# Bump version in pyproject.toml first, then:
+uv build          # builds sdist + wheel into dist/
+uv publish        # uploads dist/ to PyPI using stored credentials
+```
+
+To publish to TestPyPI instead, point `uv auth login` and `uv publish --publish-url https://test.pypi.org/legacy/` at the test endpoint.
+
 ## License
 
 MIT License - see LICENSE file for details.
