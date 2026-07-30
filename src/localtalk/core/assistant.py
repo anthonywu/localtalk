@@ -344,7 +344,6 @@ class VoiceAssistant:
             "",
             "[yellow]📵 TIP: You can now disable WiFi - LocalTalk now can work perfectly offline!",
             '[dim]💡 TIP: Adjust thinking depth anytime — say "think harder", "think faster", or "use low/medium/high reasoning"[/dim]',
-            "[dim]💡 TIP: Disable progress bars with: export TQDM_DISABLE=1[/dim]",
         ]
 
         privacy_panel = Panel("\n".join(privacy_content), title="🔒 Privacy", style="green", expand=False)
@@ -403,7 +402,8 @@ class VoiceAssistant:
                 tts_start = time.time()
 
             tts_text = _strip_markdown(response)
-            sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
+            with self.console.status("[cyan]Synthesizing speech...[/cyan]", spinner="dots"):
+                sample_rate, audio_array = self.tts.synthesize_long_form(tts_text)
 
             if self.config.show_stats:
                 tts_time = time.time() - tts_start

@@ -1,9 +1,39 @@
 """Text-to-speech service using mlx-audio."""
 
+import contextlib
+import io
+import sys
+
 import numpy as np
 from rich.console import Console
 
 from localtalk.models.config import ChatterBoxConfig
+
+# chatterbox_turbo submodules that render tqdm progress bars during generation.
+_CHATTERBOX_NOISY_MODULES = (
+    "mlx_audio.tts.models.chatterbox_turbo.models.t3.t3",
+    "mlx_audio.tts.models.chatterbox_turbo.models.s3gen.flow_matching",
+)
+
+
+def _quiet_tqdm(iterable, *args, **kwargs):
+    """Drop-in tqdm replacement that yields the iterable without rendering a bar."""
+    return iterable
+
+
+def _silence_chatterbox_output():
+    """Monkey-patch tqdm out of chatterbox_turbo's generation loops.
+
+    mlx-audio's chatterbox_turbo renders tqdm progress bars to stderr while
+    generating speech tokens and running the S3 mel decoder. Both modules bind
+    ``tqdm`` at import time, so replacing the module attribute silences the
+    bars without affecting tqdm anywhere else. Only patches modules that are
+    already imported (guaranteed right after model load); never imports them.
+    """
+    for module_name in _CHATTERBOX_NOISY_MODULES:
+        module = sys.modules.get(module_name)
+        if module is not None:
+            module.tqdm = _quiet_tqdm
 
 
 class MLXTextToSpeechService:
@@ -21,7 +51,10 @@ class MLXTextToSpeechService:
         from mlx_audio.tts.utils import load_model
 
         self.console.print(f"[cyan]Loading TTS model: {self.model_id}[/cyan]")
-        return load_model(model_path=self.model_id)
+        model = load_model(model_path=self.model_id)
+        # The chatterbox modules are imported as a side effect of load_model.
+        _silence_chatterbox_output()
+        return model
 
     @staticmethod
     def _to_numpy_audio(audio) -> np.ndarray:
@@ -42,7 +75,10 @@ class MLXTextToSpeechService:
             Tuple of (sample_rate, audio_array)
 
         """
-        results = list(self.model.generate(text=text, verbose=False))
+        # chatterbox prints chatter like "S3 Token -> Mel Inference..." to
+        # stdout during generation; keep the console clean.
+        with contextlib.redirect_stdout(io.StringIO()):
+            results = list(self.model.generate(text=text, verbose=False))
         if not results:
             return self.sample_rate, np.array([], dtype=np.float32)
 
@@ -68,9 +104,11 @@ class MLXTextToSpeechService:
             dtype=np.float32,
         )
 
-        for result in self.model.generate(text=text, verbose=False):
-            audio = self._to_numpy_audio(result.audio)
-            pieces.extend([audio, silence.copy()])
+        # See synthesize(): suppress chatterbox's stray prints during generation.
+        with contextlib.redirect_stdout(io.StringIO()):
+            for result in self.model.generate(text=text, verbose=False):
+                audio = self._to_numpy_audio(result.audio)
+                pieces.extend([audio, silence.copy()])
 
         if not pieces:
             return self.sample_rate, np.array([], dtype=np.float32)

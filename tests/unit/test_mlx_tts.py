@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -9,7 +11,12 @@ import pytest
 from rich.console import Console
 
 from localtalk.models.config import ChatterBoxConfig
-from localtalk.services.mlx_tts import MLXTextToSpeechService
+from localtalk.services.mlx_tts import (
+    _CHATTERBOX_NOISY_MODULES,
+    MLXTextToSpeechService,
+    _quiet_tqdm,
+    _silence_chatterbox_output,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -149,3 +156,69 @@ class TestSynthesizeLongForm:
         sr, audio = service.synthesize_long_form("text")
         assert audio.dtype == np.float32
         np.testing.assert_allclose(audio[:3], [0.1, -0.1, 0.5])
+
+
+# ────────────────────────── chatterbox output silencing ──────────────────────────
+
+
+def _noisy_generate(*args, **kwargs):
+    """Simulate chatterbox's stray prints during generation."""
+    print("S3 Token -> Mel Inference...")
+    yield MagicMock(audio=np.array([0.1, 0.2], dtype=np.float32))
+
+
+class TestSilenceChatterboxOutput:
+    def test_patches_tqdm_in_loaded_modules(self, monkeypatch):
+        t3 = types.ModuleType(_CHATTERBOX_NOISY_MODULES[0])
+        t3.tqdm = MagicMock()
+        flow_matching = types.ModuleType(_CHATTERBOX_NOISY_MODULES[1])
+        flow_matching.tqdm = MagicMock()
+        monkeypatch.setitem(sys.modules, t3.__name__, t3)
+        monkeypatch.setitem(sys.modules, flow_matching.__name__, flow_matching)
+
+        _silence_chatterbox_output()
+
+        assert t3.tqdm is _quiet_tqdm
+        assert flow_matching.tqdm is _quiet_tqdm
+
+    def test_ignores_modules_not_yet_imported(self, monkeypatch):
+        for name in _CHATTERBOX_NOISY_MODULES:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+        _silence_chatterbox_output()
+
+        # Must not import the modules as a side effect
+        assert all(name not in sys.modules for name in _CHATTERBOX_NOISY_MODULES)
+
+    def test_load_model_applies_silencing(self, fake_mlx_audio, monkeypatch):
+        t3 = types.ModuleType(_CHATTERBOX_NOISY_MODULES[0])
+        t3.tqdm = MagicMock()
+        monkeypatch.setitem(sys.modules, t3.__name__, t3)
+
+        MLXTextToSpeechService(ChatterBoxConfig(), Console())
+
+        assert t3.tqdm is _quiet_tqdm
+
+    def test_quiet_tqdm_yields_iterable_without_output(self, capsys):
+        assert list(_quiet_tqdm(range(3), desc="Generating speech tokens")) == [0, 1, 2]
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_synthesize_suppresses_model_prints(self, capsys):
+        model = MagicMock()
+        model.generate = _noisy_generate
+        service = _make_service(model)
+
+        service.synthesize("hello")
+
+        assert capsys.readouterr().out == ""
+
+    def test_synthesize_long_form_suppresses_model_prints(self, capsys):
+        model = MagicMock()
+        model.generate = _noisy_generate
+        service = _make_service(model)
+
+        service.synthesize_long_form("hello")
+
+        assert capsys.readouterr().out == ""
