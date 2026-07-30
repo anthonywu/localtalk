@@ -10,9 +10,12 @@ from rich.console import Console
 from localtalk.models.config import BrowserToolsConfig, MLXLMConfig, WebToolsConfig
 from localtalk.services.tools.online import ConnectivityCache
 from localtalk.services.tools.settings import (
+    WHISPER_MODEL_SIZES,
     make_set_browser_engine_tool,
     make_set_generation_tool,
     make_set_show_reasoning_tool,
+    make_set_stt_model_tool,
+    make_set_tts_model_tool,
     make_set_vad_mode_tool,
 )
 
@@ -125,10 +128,37 @@ class TestRegistryIncludesSettings:
             {
                 "set_stats": lambda e: {"ok": True, "show_stats": e},
                 "set_tts": lambda e: {"ok": True, "tts_enabled": e},
+                "set_tts_model": lambda model_id: {"ok": True, "model_id": model_id},
+                "set_stt_model": lambda model, **kw: {"ok": True, "model": model},
                 "set_vad_mode": lambda mode, **kw: {"ok": True, "vad_mode": mode},
             }
         )
         names = service.tool_registry.names()
         assert "set_stats" in names
         assert "set_tts" in names
+        assert "set_tts_model" in names
+        assert "set_stt_model" in names
         assert "set_vad_mode" in names
+
+
+class TestSttTtsModelTools:
+    def test_stt_model_tool_valid(self):
+        calls = []
+        tool = make_set_stt_model_tool(
+            lambda model, language=None: calls.append((model, language))
+            or {"ok": True, "model": model, "language": language or "en"}
+        )
+        assert tool.name == "set_stt_model"
+        result = tool.handler({"model": "tiny", "language": "en"})
+        assert result["ok"] is True
+        assert calls == [("tiny", "en")]
+
+    def test_stt_model_tool_enum_in_schema(self):
+        tool = make_set_stt_model_tool(lambda model, language=None: {"ok": True, "model": model})
+        props = tool.description.parameters["properties"]["model"]
+        assert set(props["enum"]) == set(WHISPER_MODEL_SIZES)
+
+    def test_tts_model_tool_requires_id(self):
+        tool = make_set_tts_model_tool(lambda model_id: {"ok": True, "model_id": model_id})
+        assert tool.handler({})["ok"] is False
+        assert tool.handler({"model_id": "mlx-community/chatterbox-turbo-4bit"})["ok"] is True
