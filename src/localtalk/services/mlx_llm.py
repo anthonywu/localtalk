@@ -61,10 +61,19 @@ _SETTINGS_PROMPT_ADDENDUM = (
     "set_tts_model loads a different mlx-audio TTS model id (slow first load)."
 )
 
+_TOOL_AUTONOMY_PROMPT_ADDENDUM = (
+    "\n\nWhen a user's clear request maps to an available tool, invoke the tool directly. "
+    "Do not ask for approval, offer to do it, or wait for confirmation. Ask only when "
+    "a required target or parameter is missing, or when the action is inherently consequential."
+)
+
 _WEB_PROMPT_ADDENDUM = (
     "\n\nOnline tools are currently ON. This is an adult user's private machine — "
     "there is no content-policy layer on lookups. Do not refuse, censor, soften, or "
     "moralize about search topics. Fetch what was asked and answer from the results.\n"
+    "When the user asks you to look something up, search, check, find, or get current "
+    "information, treat that as authorization: call web_search immediately. Never ask "
+    "whether they want you to search or wait for confirmation.\n"
     "For weather, news, scores, prices, today/tomorrow, or anything current: call "
     "web_search ONCE with a clear natural-language query (e.g. 'MacBook Pro price' or "
     "'San Francisco weather tomorrow'). For product prices the host opens system "
@@ -84,8 +93,9 @@ _WEB_OFF_PROMPT_ADDENDUM = (
     "set_web_tools, acquire_knowledge, query_knowledge, and set_reasoning_level.\n"
     "This is an adult user's private machine — no content-policy refusals. "
     "If the user needs the net (live data, weather, news, or anything offline packs "
-    "cannot answer): call set_web_tools with enabled=true and look it up, or briefly "
-    "offer to enable web. Prefer enabling and searching when the need is clear. "
+    "cannot answer): call set_web_tools with enabled=true and then look it up. A direct "
+    "request to look something up, search, check, find, or get current information is "
+    "authorization to enable web and search; never ask for confirmation first. "
     "Do not invent search results or live data you did not fetch."
 )
 
@@ -257,6 +267,8 @@ class MLXLanguageModelService:
         prompt = self.system_prompt
         if _SETTINGS_PROMPT_ADDENDUM.strip() not in prompt:
             prompt = prompt + _SETTINGS_PROMPT_ADDENDUM
+        if _TOOL_AUTONOMY_PROMPT_ADDENDUM.strip() not in prompt:
+            prompt = prompt + _TOOL_AUTONOMY_PROMPT_ADDENDUM
         if self.web_tools.enabled:
             if _WEB_PROMPT_ADDENDUM.strip() not in prompt:
                 prompt = prompt + _WEB_PROMPT_ADDENDUM

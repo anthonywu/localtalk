@@ -874,19 +874,28 @@ class VoiceAssistant:
 
         llm_start = time.perf_counter()
         response = ""
+        llm_failed = False
         try:
             response = self.llm.generate_response(
                 text,
                 self.config.session_id,
                 on_spoken_sentence=sink,
             )
-        except Exception:
+        except Exception as exc:
+            llm_failed = True
             if self.tts:
                 try:
                     self.audio.play_earcon("error")
                 except Exception:
                     pass
-            raise
+            # Surface a controlled message instead of an unhandled traceback mid-turn.
+            self.console.print(f"[red]LLM error: {exc}[/red]")
+            metrics["error"] = str(exc)
+            response = ""
+            print_assistant_utterance(
+                self.console,
+                "Sorry, I hit an error generating a response. Please try again.",
+            )
         finally:
             wall_ms = (time.perf_counter() - llm_start) * 1000.0
             # TTS/play run inside the generate_response call via the sink; subtract
@@ -905,7 +914,7 @@ class VoiceAssistant:
         if stt_ms is not None:
             metrics["pipeline_total_ms"] = float(stt_ms) + float(metrics["total_ms"])
 
-        if self.config.show_stats:
+        if self.config.show_stats and not llm_failed:
             self.console.print(f"[dim]📊 LLM: {metrics['llm_ms'] / 1000.0:.2f}s[/dim]")
             if metrics.get("tts_ms") is not None:
                 self.console.print(
@@ -927,7 +936,7 @@ class VoiceAssistant:
         except Exception as exc:
             self.console.print(f"[yellow]Warning: could not write metrics: {exc}[/yellow]")
 
-        if not self.tts:
+        if not self.tts and not llm_failed:
             self.console.print("[dim]Note: TTS is disabled.[/dim]")
         soft_rule(self.console)
 
