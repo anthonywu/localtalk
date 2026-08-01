@@ -1,10 +1,22 @@
 # 💻🎤🔊 localtalk
 
-A privacy-first voice assistant that runs entirely offline on Apple Silicon, perfect for travelers, privacy-conscious users, and anyone who values their data sovereignty. No accounts, no cloud services, no tracking - just powerful AI that respects your privacy.
+A privacy-first voice assistant that runs entirely offline on Apple Silicon. It's built for **DIYers, educators, parents, and learners** who want a fully-local voice assistant they can understand, modify, and teach with — and for travelers and the privacy-conscious who value their data sovereignty. No accounts, no cloud services, no tracking.
 
 Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
 
 > **Status:** Alpha software (`0.6.0`), but as of August 2026 it is rather usable. It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — though it is not yet polished for general use. We believe we are one or two generations of open-weight models away from it being generally usable. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+
+## Design Philosophy
+
+LocalTalk has a deliberate scope and a few opinions that shape how it's built.
+
+**Apple-native, end to end.** All Apple platform capabilities are in scope. Where an Apple-native API or framework — AVFoundation Speech Synthesis, on-device Apple Foundation Models, the Speech framework, system voices like *Tingting* — gives a better local experience than a cross-platform library, LocalTalk prefers it. This is an unapologetically Apple-native project: Apple APIs win on macOS by default; Linux is a secondary target, not a portability mandate.
+
+**macOS-first, latest-first.** LocalTalk's primary target is macOS on Apple Silicon. We develop against and optimize for the newest macOS release, and adopt new platform features (e.g. Apple Foundation Models on macOS 27) as soon as they land. Older OS versions get **best-effort fallbacks** where they're cheap, but are not a release blocker: if a feature needs the latest OS, we'll call that out clearly rather than backport it. Linux (CUDA backend) is in scope, but is not prioritized — macOS is where we focus our effort.
+
+**Terminal-first, terminal-only.** LocalTalk lives in the terminal, and a GUI is explicitly **out of scope**. Keeping the interface textual keeps the iteration loop tight: the same CLI a human drives is what a coding assistant drives during development, and what runs the project's tests, evals, and other verifications. A GUI would add surface area, slow that loop, and pull focus from the core STT/LLM/TTS work. If you want a GUI, wrap the CLI yourself — it's a stable boundary, not a thing we plan to build.
+
+**Built for tinkerers and learners.** The intended audience is DIYers, educators, parents, and learners — people who want to understand, modify, and teach with a fully-local voice assistant, not just consume one. That shapes the defaults: zero accounts, zero API keys, one-command install, and everything inspectable on disk.
 
 ## Why This Project Exists
 
@@ -18,9 +30,9 @@ Plenty of alternative projects exist, but `localtalk` aims for the best one line
 
 ### Why Not Use Apple's Built-in "Say" Command?
 
-LocalTalk uses ChatterBox Turbo for its default English voice. For Chinese, it can use macOS's built-in, free `say` voice **Tingting** with no model download. The larger local Qwen3-TTS model remains available as an optional higher-quality Chinese voice.
+LocalTalk uses ChatterBox Turbo for its default English voice. For Chinese, it can use macOS's built-in, free **Tingting** voice with no model download. The larger local Qwen3-TTS model remains available as an optional higher-quality Chinese voice.
 
-Apple's newer [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) offers much higher quality voices that could be a great fit for this project. However, we're waiting for proper Python library support to integrate it. Once Python bindings become available, we'll add support for these modern Apple voices as another local TTS option.
+Tingting is rendered through Apple's modern [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) (`AVSpeechSynthesizer`) via [PyObjC](https://pyobjc.readthedocs.io/), which talks to the synthesizer in-process and delivers float32 PCM directly — no per-sentence `say` subprocess, no temp AIFF file — and unlocks Apple's enhanced and eloquence voice tiers. The legacy `say` command (`macos_say` backend) is retained as a selectable fallback. To use the modern voices, `pyobjc-framework-AVFoundation` is now an installed dependency.
 
 Built with speech recognition (Whisper), language model processing (gpt-oss/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
 
@@ -76,8 +88,8 @@ brew install libsndfile
 
 **Platform Support:**
 
-- macOS (Apple Silicon): ✅ Fully supported as first class platform.
-- Linux / CUDA backend: 🚧 Planned (see roadmap below).
+- macOS (Apple Silicon): ✅ Fully supported as first class platform. We optimize for the latest macOS release; older releases get best-effort fallbacks (see [Design Philosophy](#design-philosophy)).
+- Linux / CUDA backend: 🟡 In scope, not prioritized (see [Design Philosophy](#design-philosophy)).
 - Windows: 🤷🏼‍♂️ Would consider, but not seriously.
 
 ## Installation - with uv
@@ -450,6 +462,6 @@ Startup probes connectivity (unless `--skip-network-probe`). **Default policy is
 - **Thinking Machines models**: Evaluate open-weight Inkling models and future Interaction Models as Apple-Silicon-friendly local runtimes emerge. Inkling's native audio input, controllable thinking effort, and tool use are a strong conceptual fit; LocalTalk's provider-adapter boundary can support it alongside the current gpt-oss/Harmony path, rather than as a drop-in model swap.
 - **Voice profiles**: Save and switch between different voice configurations
 - **Plugin system**: Extend functionality with custom modules
-- **Platform support**: Linux support (P2), Windows consideration (P3)
+- **Platform support**: Linux (CUDA backend) is in scope but not prioritized; Windows is only a consideration. A GUI is **out of scope by design** — see [Design Philosophy](#design-philosophy).
 
 > Already shipped: multi-turn conversation history (per-session context), mid-session reasoning control, and a datetime-aware default persona.
