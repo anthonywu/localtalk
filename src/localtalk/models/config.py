@@ -80,9 +80,12 @@ class AppleSpeechConfig(BaseModel):
     subprocess, no temp AIFF) and unlocking Apple's enhanced/eloquence voices.
     """
 
-    voice_identifier: str = Field(
-        default="com.apple.voice.compact.zh-CN.Tingting",
-        description="AVSpeechSynthesisVoice identifier (System Voices lists these)",
+    voice_identifier: str | None = Field(
+        default=None,
+        description=(
+            "AVSpeechSynthesisVoice identifier for an explicit voice; None (default) "
+            "auto-picks the highest-quality installed natural voice for `language`"
+        ),
     )
     language: str = Field(
         default="zh-CN",

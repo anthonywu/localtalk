@@ -355,11 +355,19 @@ class VoiceAssistant:
                         "chatterbox": "ChatterBox TTS (MLX)",
                         "qwen_chinese": "Qwen3-TTS Chinese (MLX)",
                         "macos_say": f"macOS say ({self.config.macos_say.voice})",
-                        "apple_speech": (
-                            f"Apple speech ({self.config.apple_speech.voice_identifier.rsplit('.', 1)[-1]})"
-                        ),
+                        # model_id already carries name + language + tier
+                        # ("Apple speech: Tingting (zh-CN, Premium)").
+                        "apple_speech": self.tts.model_id,
                     }
                     init_messages.append(f"🗣️ {labels[self.config.tts_backend]} enabled")
+                    # AVSpeechSynthesizer exposes higher-quality voice tiers; if the
+                    # auto-pick (or explicit identifier) landed on Default, nudge the
+                    # user toward downloading an Enhanced/Premium voice.
+                    if self.config.tts_backend == "apple_speech" and getattr(self.tts, "tier", None) == "Default":
+                        init_messages.append(
+                            '💡 Default voice tier in use — run "localtalk --list-voices" '
+                            "to see available higher-quality voices."
+                        )
                     live.update(create_panel())
                 except ImportError as e:
                     self.console.print(f"[red]❌ TTS import failed: {e}")

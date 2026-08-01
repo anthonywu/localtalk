@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 
 import numpy as np
 from rich.console import Console
@@ -19,6 +20,15 @@ from localtalk.models.config import AppleSpeechConfig
 
 # Upper bound for one synthesis call; announcements can be long.
 _SYNTH_TIMEOUT_S = 60.0
+
+# AVSpeechSynthesisVoiceQuality is a stable Apple enum: 1=Default, 2=Enhanced,
+# 3=Premium. AVFoundation exposes the same values as AVSpeechSynthesisVoiceQuality*.
+_QUALITY_TIERS = {1: "Default", 2: "Enhanced", 3: "Premium"}
+
+
+def _tier_label(quality: int) -> str:
+    """Map an AVSpeechSynthesisVoice quality value to a human tier name."""
+    return _QUALITY_TIERS.get(int(quality), f"Quality {quality}")
 
 
 def _avfoundation():
@@ -66,6 +76,46 @@ def _buffer_to_float32(pcm_buffer) -> tuple[float, np.ndarray]:
     return sample_rate, (np.stack(rows) if rows else np.empty((0, 0), dtype=np.float32))
 
 
+@dataclass(frozen=True)
+class InstalledVoice:
+    """A snapshot of one installed AVSpeechSynthesisVoice for display/listing."""
+
+    identifier: str
+    name: str
+    language: str
+    quality: int
+    is_eloquence: bool
+
+    @property
+    def tier(self) -> str:
+        return _tier_label(self.quality)
+
+
+def list_installed_voices(language: str | None = None) -> list[InstalledVoice]:
+    """Enumerate installed AVSpeechSynthesis voices, optionally filtered by language.
+
+    Used by the ``--list-voices`` CLI command to show installed voice tiers and
+    guide users toward downloading higher-quality ones. Requires PyObjC.
+    """
+    av = _avfoundation()
+    out: list[InstalledVoice] = []
+    for v in av.AVSpeechSynthesisVoice.speechVoices():
+        lang = v.language()
+        if language is not None and lang != language:
+            continue
+        ident = v.identifier()
+        out.append(
+            InstalledVoice(
+                identifier=ident,
+                name=v.name(),
+                language=lang,
+                quality=int(v.quality()),
+                is_eloquence="eloquence" in ident,
+            )
+        )
+    return out
+
+
 class AppleSpeechTextToSpeechService:
     """Synthesize speech with AVSpeechSynthesizer, fully in-process."""
 
@@ -74,12 +124,18 @@ class AppleSpeechTextToSpeechService:
         self.console = console or Console()
         self._av = _avfoundation()
         self._voice = self._resolve_voice()
-        self.model_id = f"Apple speech: {self._voice.name()} ({self._voice.language()})"
+        self.tier = _tier_label(self._voice.quality())
+        self.model_id = f"Apple speech: {self._voice.name()} ({self._voice.language()}, {self.tier})"
 
     def _resolve_voice(self):
-        """Fail fast at load time if the configured voice is not installed."""
+        """Resolve the voice to use, failing fast at load time on misconfiguration.
+
+        An explicit ``voice_identifier`` is matched exactly (with install hints
+        on miss). When it is ``None`` (the default), pick the highest-quality
+        *natural* voice for the configured language — eloquence/character voices
+        are only chosen if no natural voice exists, since they are novelty voices.
+        """
         av = self._av
-        voice = None
         if self.config.voice_identifier:
             voice = av.AVSpeechSynthesisVoice.voiceWithIdentifier_(self.config.voice_identifier)
             if voice is None:
@@ -89,13 +145,22 @@ class AppleSpeechTextToSpeechService:
                 raise RuntimeError(
                     f"Apple voice {self.config.voice_identifier!r} is not installed.{hint} "
                     "Install voices via System Settings → Accessibility → Spoken Content → "
-                    "System Voices, or set another identifier in AppleSpeechConfig."
+                    "System Voices, or set voice_identifier=None to auto-pick the best "
+                    "installed voice for the language."
                 )
-        else:
-            voice = av.AVSpeechSynthesisVoice.voiceWithLanguage_(self.config.language)
-        if voice is None:
-            raise RuntimeError(f"No Apple voice available for language {self.config.language!r}.")
-        return voice
+            return voice
+
+        candidates = [v for v in av.AVSpeechSynthesisVoice.speechVoices() if v.language() == self.config.language]
+        natural = [v for v in candidates if "eloquence" not in v.identifier()]
+        pool = natural or candidates
+        if not pool:
+            raise RuntimeError(
+                f"No Apple voice installed for language {self.config.language!r}. "
+                "Install one via System Settings → Accessibility → Spoken Content → System Voices."
+            )
+        # Highest quality wins; ties resolve to the first match in speechVoices()
+        # order, which is stable and lists natural voices before eloquence ones.
+        return max(pool, key=lambda v: v.quality())
 
     def synthesize(self, text: str) -> tuple[int, np.ndarray]:
         """Synthesize text to (sample_rate, float32 mono samples)."""

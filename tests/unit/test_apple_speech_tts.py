@@ -18,7 +18,10 @@ from localtalk.models.config import AppleSpeechConfig
 from localtalk.services import apple_speech_tts as asr
 from localtalk.services.apple_speech_tts import (
     AppleSpeechTextToSpeechService,
+    InstalledVoice,
     _buffer_to_float32,
+    _tier_label,
+    list_installed_voices,
 )
 
 pytestmark = pytest.mark.unit
@@ -79,8 +82,10 @@ class _FakeVoice:
         identifier: str = "com.apple.voice.compact.zh-CN.Tingting",
         name: str = "Tingting",
         language: str = "zh-CN",
+        quality: int = 1,
     ) -> None:
         self._id, self._name, self._lang = identifier, name, language
+        self._quality = quality
 
     def identifier(self) -> str:
         return self._id
@@ -90,6 +95,9 @@ class _FakeVoice:
 
     def language(self) -> str:
         return self._lang
+
+    def quality(self) -> int:
+        return self._quality
 
 
 class _FakeUtterance:
@@ -198,9 +206,46 @@ def test_buffer_to_float32_multi_channel():
 # --- voice resolution ---
 
 
-def test_resolve_voice_loads_default_identifier(av_mocked):
+def test_resolve_voice_auto_picks_default_tingting(av_mocked):
+    # Default config (voice_identifier=None) auto-picks the natural zh-CN voice.
     service = AppleSpeechTextToSpeechService(AppleSpeechConfig())
-    assert service.model_id == "Apple speech: Tingting (zh-CN)"
+    assert service.model_id == "Apple speech: Tingting (zh-CN, Default)"
+    assert service.tier == "Default"
+
+
+def test_resolve_voice_auto_picks_highest_quality(av_mocked):
+    # When a higher tier is installed, auto-pick prefers it.
+    av_mocked.AVSpeechSynthesisVoice.speechVoices = lambda: [
+        _FakeVoice(identifier="com.apple.voice.compact.zh-CN.Tingting", quality=1),
+        _FakeVoice(identifier="com.apple.voice.premium.zh-CN.Tingting", quality=3),
+    ]
+    service = AppleSpeechTextToSpeechService(AppleSpeechConfig())
+    assert service.tier == "Premium"
+    assert service._voice.identifier() == "com.apple.voice.premium.zh-CN.Tingting"
+
+
+def test_resolve_voice_auto_deprioritizes_eloquence(av_mocked):
+    # Eloquence character voices never beat a natural voice at the same tier.
+    av_mocked.AVSpeechSynthesisVoice.speechVoices = lambda: [
+        _FakeVoice(identifier="com.apple.voice.compact.zh-CN.Tingting", quality=1),
+        _FakeVoice(identifier="com.apple.eloquence.zh-CN.Eddy", name="Eddy", quality=1),
+    ]
+    service = AppleSpeechTextToSpeechService(AppleSpeechConfig())
+    assert service._voice.name() == "Tingting"
+
+
+def test_resolve_voice_auto_eloquence_only_fallback(av_mocked):
+    # If only eloquence voices exist for the language, fall back to one of them.
+    av_mocked.AVSpeechSynthesisVoice.speechVoices = lambda: [
+        _FakeVoice(identifier="com.apple.eloquence.zh-CN.Eddy", name="Eddy", quality=1),
+    ]
+    service = AppleSpeechTextToSpeechService(AppleSpeechConfig())
+    assert service._voice.name() == "Eddy"
+
+
+def test_resolve_voice_auto_no_voices_for_language_raises(av_mocked):
+    with pytest.raises(RuntimeError, match="No Apple voice installed for language 'ja-JP'"):
+        AppleSpeechTextToSpeechService(AppleSpeechConfig(voice_identifier=None, language="ja-JP"))
 
 
 def test_resolve_voice_missing_identifier_raises_with_install_hint(av_mocked):
@@ -218,12 +263,6 @@ def test_resolve_voice_missing_identifier_suggests_similar(av_mocked):
     ]
     with pytest.raises(RuntimeError, match="Similar installed: com.apple.voice.compact.zh-CN.Tingting"):
         AppleSpeechTextToSpeechService(AppleSpeechConfig(voice_identifier="Tingting"))
-
-
-def test_resolve_voice_language_fallback_none_raises(av_mocked):
-    av_mocked.AVSpeechSynthesisVoice.voiceWithLanguage_ = lambda _lang: None
-    with pytest.raises(RuntimeError, match="No Apple voice available for language 'ja-JP'"):
-        AppleSpeechTextToSpeechService(AppleSpeechConfig(voice_identifier="", language="ja-JP"))
 
 
 # --- synthesize ---
@@ -313,3 +352,49 @@ def test_synthesize_long_form_delegates_to_synthesize(av_mocked):
     sr_short, audio_short = service.synthesize("你好")
     sr_long, audio_long = service.synthesize_long_form("你好")
     assert (sr_short, list(audio_short)) == (sr_long, list(audio_long))
+
+
+# --- tier labeling ---
+
+
+def test_tier_label_maps_apple_quality_enum():
+    assert _tier_label(1) == "Default"
+    assert _tier_label(2) == "Enhanced"
+    assert _tier_label(3) == "Premium"
+    assert _tier_label(9) == "Quality 9"  # unknown future tier stays readable
+
+
+# --- list_installed_voices ---
+
+
+def test_list_installed_voices_maps_fields_and_tiers(av_mocked):
+    av_mocked.AVSpeechSynthesisVoice.speechVoices = lambda: [
+        _FakeVoice(identifier="com.apple.voice.premium.zh-CN.Tingting", name="Tingting", quality=3),
+        _FakeVoice(identifier="com.apple.eloquence.zh-CN.Eddy", name="Eddy", quality=1),
+        _FakeVoice(identifier="com.apple.voice.compact.en-US.Samantha", name="Samantha", language="en-US", quality=1),
+    ]
+    voices = list_installed_voices()
+    assert len(voices) == 3
+    by_id = {v.identifier: v for v in voices}
+    ting = by_id["com.apple.voice.premium.zh-CN.Tingting"]
+    assert ting.tier == "Premium"
+    assert ting.language == "zh-CN"
+    assert ting.is_eloquence is False
+    assert by_id["com.apple.eloquence.zh-CN.Eddy"].is_eloquence is True
+
+
+def test_list_installed_voices_language_filter(av_mocked):
+    av_mocked.AVSpeechSynthesisVoice.speechVoices = lambda: [
+        _FakeVoice(identifier="com.apple.voice.compact.zh-CN.Tingting", language="zh-CN"),
+        _FakeVoice(identifier="com.apple.voice.compact.en-US.Samantha", name="Samantha", language="en-US"),
+    ]
+    zh = list_installed_voices("zh-CN")
+    assert [v.language for v in zh] == ["zh-CN"]
+    assert len(zh) == 1
+
+
+def test_installed_voice_is_frozen():
+    v = InstalledVoice("id", "Tingting", "zh-CN", 3, False)
+    with pytest.raises(AttributeError):  # FrozenInstanceError subclasses AttributeError
+        v.name = "other"  # type: ignore[misc]
+    assert v.tier == "Premium"
