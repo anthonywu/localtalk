@@ -117,6 +117,8 @@ uvx localtalk
 
 ## Contributor/Developer Setup
 
+> **Building tools or extending the assistant?** Read [`TOOLS.md`](./TOOLS.md) — a beginner-friendly guide to how the AI's tools work and how to add your own (no AI dev experience required).
+
 1. **Clone the repository**:
 
 ```bash
