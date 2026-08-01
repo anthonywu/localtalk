@@ -284,6 +284,26 @@ class TestProcessTextResponse:
         tts_text = tts.synthesize.call_args[0][0]
         assert "**" not in tts_text
         assert assistant.audio.play_audio.called
+        assert not assistant.audio.save_audio_file.called
+        # Streaming path pads with chatterbox.silence_between_pieces_ms
+        assert assistant.audio.play_audio.call_args.kwargs.get("trail_silence_ms") == float(
+            assistant.config.chatterbox.silence_between_pieces_ms
+        )
+
+    def test_with_save_audio_writes_each_tts_chunk(self, tmp_path):
+        tts = MagicMock()
+        tts.synthesize.return_value = (24000, np.array([0.1, 0.2], dtype=np.float32))
+        assistant = self._make_assistant_with_mocks(tts=tts)
+        assistant.config.audio.save_generated_audio = True
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
+        assistant.llm.generate_response.side_effect = _llm_returns("Hello")
+        assistant.audio.play_audio.return_value = True
+
+        assistant._process_text_response("hi")
+
+        assistant.audio.save_audio_file.assert_called_once()
 
     def test_without_tts_only_calls_llm(self, tmp_path):
         assistant = self._make_assistant_with_mocks(tts=None)

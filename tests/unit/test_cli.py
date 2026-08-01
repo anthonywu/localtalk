@@ -180,6 +180,12 @@ class TestMain:
         mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
         config = mock_va_class.call_args[0][0]
         assert config.tts_backend == "chatterbox"
+        assert config.audio.save_generated_audio is False
+
+    def test_main_save_audio_enables_generated_audio_files(self):
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--save-audio"])
+        config = mock_va_class.call_args[0][0]
+        assert config.audio.save_generated_audio is True
 
     def test_main_stats_flag(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--stats"])

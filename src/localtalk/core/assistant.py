@@ -712,6 +712,9 @@ class VoiceAssistant:
         try:
             with self.console.status("[cyan]Synthesizing speech...[/cyan]", spinner="dots"):
                 sample_rate, audio_array = self.tts.synthesize_long_form(spoken)
+            if self.config.audio.save_generated_audio:
+                audio_path = self.audio.save_audio_file(audio_array, sample_rate, prefix="announcement")
+                self.console.print(f"[dim]Saved audio to: {audio_path}[/dim]")
             self.audio.play_audio(audio_array, sample_rate)
         except Exception as exc:
             self.console.print(f"[yellow]Warning: could not speak announcement: {exc}[/yellow]")
@@ -740,6 +743,9 @@ class VoiceAssistant:
         try:
             tts_start = time.perf_counter()
             sample_rate, audio_array = self.tts.synthesize(spoken)
+            if self.config.audio.save_generated_audio:
+                audio_path = self.audio.save_audio_file(audio_array, sample_rate)
+                self.console.print(f"[dim]Saved audio to: {audio_path}[/dim]")
             tts_ms = (time.perf_counter() - tts_start) * 1000.0
             metrics["tts_ms"] = float(metrics.get("tts_ms") or 0.0) + tts_ms
             metrics["chunks"] = int(metrics.get("chunks") or 0) + 1
@@ -769,6 +775,8 @@ class VoiceAssistant:
                     )
 
             play_start = time.perf_counter()
+            # Edge fades + inter-sentence silence: 0.7 streaming TTS restarts
+            # PortAudio per sentence (unlike pre-0.7 single long-form play).
             # Keep Rich's live playback waveform off for now: its frequent terminal
             # redraws cause audible crackling on the MacBook Pro speakers. Re-enable
             # it once rendering is decoupled from the real-time playback path.
@@ -777,6 +785,7 @@ class VoiceAssistant:
                 sample_rate,
                 interrupt_check=self._playback_stop.is_set,
                 show_waveform=False,
+                trail_silence_ms=float(self.config.chatterbox.silence_between_pieces_ms),
             )
             metrics["play_ms"] = float(metrics.get("play_ms") or 0.0) + (time.perf_counter() - play_start) * 1000.0
             if not finished:

@@ -125,6 +125,10 @@ class BrowserToolsConfig(BaseModel):
 class AudioConfig(BaseModel):
     """Configuration for audio recording and playback."""
 
+    save_generated_audio: bool = Field(
+        default=False,
+        description="Save generated TTS responses as WAV files (disabled by default)",
+    )
     sample_rate: int = Field(default=16000, ge=8000, le=96000, description="Audio sample rate")
     channels: int = Field(default=1, ge=1, le=2, description="Number of audio channels")
     chunk_size: int = Field(default=512, ge=64, description="Audio chunk size")

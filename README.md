@@ -172,6 +172,9 @@ localtalk
 
 # Disable TTS for text-only mode
 localtalk --no-tts
+
+# Save generated responses as WAV files (off by default)
+localtalk --save-audio
 ```
 
 ### Disabling Progress Bars
@@ -218,6 +221,7 @@ localtalk
 **TTS & Output Options:**
 
 - `--no-tts`: Disable TTS for text-only mode
+- `--save-audio`: Save generated TTS responses as WAV files in `audio_outputs/` (off by default)
 - `--show-reasoning`: Show the analysis/commentary reasoning channels in the terminal (hidden by default to reduce noise)
 
 **System Prompt Options:**

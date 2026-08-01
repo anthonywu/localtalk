@@ -102,6 +102,11 @@ def parse_args():
         action="store_true",
         help="Disable TTS and use text-only mode",
     )
+    parser.add_argument(
+        "--save-audio",
+        action="store_true",
+        help="Save generated TTS responses as WAV files in audio_outputs/ (off by default)",
+    )
 
     # Reasoning visibility
     parser.add_argument(
@@ -286,6 +291,7 @@ def main():
         config.tts_backend = "none"
     else:
         config.tts_backend = "chatterbox"
+    config.audio.save_generated_audio = args.save_audio
 
     # Enable stats if requested
     config.show_stats = args.stats

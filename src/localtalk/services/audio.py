@@ -5,6 +5,8 @@ import sys
 import threading
 import time
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -23,6 +25,48 @@ from localtalk.utils.waveform import (
     level_to_block,
     render_waveform,
 )
+
+# Default edge fade for speech playback. Streaming sentence TTS restarts
+# PortAudio per chunk; non-zero endpoints click without this.
+DEFAULT_PLAYBACK_FADE_MS = 10.0
+
+
+def apply_edge_fades(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    fade_ms: float = DEFAULT_PLAYBACK_FADE_MS,
+) -> np.ndarray:
+    """Apply short cosine fade-in/out so stream restarts don't pop.
+
+    Fade length is clamped to at most half the signal so short clips still
+    ramp cleanly to/from zero.
+    """
+    if audio.size == 0 or sample_rate <= 0 or fade_ms <= 0:
+        return audio
+    out = np.asarray(audio, dtype=np.float32).reshape(-1).copy()
+    n_fade = min(len(out) // 2, max(1, int(round(sample_rate * fade_ms / 1000.0))))
+    if n_fade < 1:
+        return out
+    # Hann half-window: smooth 0→1 / 1→0 without a hard slope discontinuity.
+    ramp = np.sin(np.linspace(0.0, np.pi / 2.0, n_fade, dtype=np.float32)) ** 2
+    out[:n_fade] *= ramp
+    out[-n_fade:] *= ramp[::-1]
+    return out
+
+
+def pad_trailing_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    silence_ms: float,
+) -> np.ndarray:
+    """Append zeros so consecutive ``sd.play`` calls have a soft gap."""
+    if audio.size == 0 or sample_rate <= 0 or silence_ms <= 0:
+        return audio
+    n = int(round(sample_rate * silence_ms / 1000.0))
+    if n <= 0:
+        return np.asarray(audio, dtype=np.float32).reshape(-1)
+    return np.concatenate([np.asarray(audio, dtype=np.float32).reshape(-1), np.zeros(n, dtype=np.float32)])
 
 
 class AudioService:
@@ -305,12 +349,39 @@ class AudioService:
             pieces.append(wave)
             pieces.append(np.zeros(int(sample_rate * 0.015), dtype=np.float32))
 
+        # Extra trailing gap after "speak" so the following 24 kHz TTS stream
+        # restart does not butt against the 16 kHz earcon tail.
+        if kind == "speak":
+            pieces.append(np.zeros(int(sample_rate * 0.04), dtype=np.float32))
+
         audio = np.concatenate(pieces) if pieces else np.array([], dtype=np.float32)
         try:
             self.sd.play(audio, sample_rate)
             self.sd.wait()
         except Exception:
             pass
+
+    def save_audio_file(
+        self,
+        audio_array: np.ndarray,
+        sample_rate: int,
+        *,
+        output_dir: str | Path = "audio_outputs",
+        prefix: str = "response",
+    ) -> Path:
+        """Save generated audio as a labeled 32-bit float WAV file."""
+        import soundfile as sf
+
+        audio = np.asarray(audio_array, dtype=np.float32).reshape(-1)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        channels = 1
+        bits = 32
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        filename = f"{prefix}_{timestamp}_{sample_rate}hz_{channels}ch_{bits}bit.wav"
+        path = output_path / filename
+        sf.write(path, audio, sample_rate, subtype="FLOAT")
+        return path
 
     def play_audio(
         self,
@@ -319,6 +390,8 @@ class AudioService:
         *,
         interrupt_check=None,
         show_waveform: bool = True,
+        fade_ms: float = DEFAULT_PLAYBACK_FADE_MS,
+        trail_silence_ms: float = 0.0,
     ) -> bool:
         """Play audio array with a live scrolling waveform.
 
@@ -327,6 +400,8 @@ class AudioService:
             sample_rate: Sample rate (uses config default if not provided)
             interrupt_check: Optional callable returning True to stop playback early
             show_waveform: When False, play without the Live waveform panel
+            fade_ms: Cosine edge fade to avoid clicks on stream restarts (0 disables)
+            trail_silence_ms: Zeros appended after the signal (soft gap before next play)
 
         Returns:
             True if playback finished, False if interrupted or empty.
@@ -344,6 +419,11 @@ class AudioService:
         # Ensure audio is in range [-1, 1]
         if np.abs(audio_array).max() > 1.0:
             audio_array = audio_array / np.abs(audio_array).max()
+
+        # Soften hard PortAudio restarts between streamed TTS sentences.
+        audio_array = apply_edge_fades(audio_array, sample_rate, fade_ms=fade_ms)
+        if trail_silence_ms > 0:
+            audio_array = pad_trailing_silence(audio_array, sample_rate, trail_silence_ms)
 
         if show_waveform:
             blank_line(self.console)

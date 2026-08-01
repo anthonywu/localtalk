@@ -94,6 +94,7 @@ class TestChatterBoxConfig:
 class TestAudioConfig:
     def test_defaults(self):
         cfg = AudioConfig()
+        assert cfg.save_generated_audio is False
         assert cfg.sample_rate == 16000
         assert cfg.channels == 1
         assert cfg.chunk_size == 512
