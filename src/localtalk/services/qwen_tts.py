@@ -45,7 +45,11 @@ class QwenTextToSpeechService:
             )
         if not results:
             return self.sample_rate, np.array([], dtype=np.float32)
-        return self.sample_rate, self._to_numpy_audio(results[0].audio)
+        if len(results) == 1:
+            return self.sample_rate, self._to_numpy_audio(results[0].audio)
+        # Long inputs can yield multiple audio segments; concatenate so later
+        # segments are not silently dropped (e.g. spoken announcements).
+        return self.sample_rate, np.concatenate([self._to_numpy_audio(r.audio) for r in results])
 
     def synthesize_long_form(self, text: str) -> tuple[int, np.ndarray]:
         return self.synthesize(text)
