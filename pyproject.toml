@@ -49,6 +49,7 @@ dependencies = [
     "onnxruntime>=1.16.1",  # via silero-vad
     "openai-harmony>=0.0.8,<1.0",  # direct
     "openai-whisper>=20250625",  # direct
+    "pyobjc-framework-AVFoundation>=12.0",  # direct; AVSpeechSynthesizer Chinese TTS
     "pydantic>=2.0.0",  # direct; also via fastapi (via mlx-vlm)
     "rich>=14.2.0",  # direct
     "silero-vad>=6.2",  # direct

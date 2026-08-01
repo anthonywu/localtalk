@@ -72,6 +72,35 @@ class MacOSSayConfig(BaseModel):
     silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
 
 
+class AppleSpeechConfig(BaseModel):
+    """Configuration for Apple AVSpeechSynthesizer (in-process, modern voices).
+
+    Backs the ``apple_speech`` TTS backend. Unlike ``say`` it talks to the
+    synthesizer in-process via PyObjC, yielding float32 PCM directly (no
+    subprocess, no temp AIFF) and unlocking Apple's enhanced/eloquence voices.
+    """
+
+    voice_identifier: str = Field(
+        default="com.apple.voice.compact.zh-CN.Tingting",
+        description="AVSpeechSynthesisVoice identifier (System Voices lists these)",
+    )
+    language: str = Field(
+        default="zh-CN",
+        description="Fallback BCP-47 language used when voice_identifier is empty",
+    )
+    rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Optional AVSpeechUtterance rate in the 0.0–1.0 range",
+    )
+    silence_between_pieces_ms: int = Field(
+        default=250,
+        ge=0,
+        description="Silence between TTS pieces in milliseconds",
+    )
+
+
 class WebToolsConfig(BaseModel):
     """Online tools (web_search + browser). Effective state is ``enabled``.
 
@@ -190,6 +219,7 @@ class AppConfig(BaseModel):
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
     qwen_tts: QwenTTSConfig = Field(default_factory=QwenTTSConfig)
     macos_say: MacOSSayConfig = Field(default_factory=MacOSSayConfig)
+    apple_speech: AppleSpeechConfig = Field(default_factory=AppleSpeechConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     web_tools: WebToolsConfig = Field(default_factory=WebToolsConfig)
     browser_tools: BrowserToolsConfig = Field(default_factory=BrowserToolsConfig)
@@ -203,7 +233,7 @@ class AppConfig(BaseModel):
         default="mlx",
         description="LLM backend: mlx (GPT OSS), auto (Apple FM when available), or apple",
     )
-    tts_backend: Literal["chatterbox", "qwen_chinese", "macos_say", "none"] = Field(
+    tts_backend: Literal["chatterbox", "qwen_chinese", "macos_say", "apple_speech", "none"] = Field(
         default="chatterbox",
         description="TTS backend to use",
     )
