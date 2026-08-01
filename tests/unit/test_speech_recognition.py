@@ -119,6 +119,22 @@ class TestTranscriptionResult:
         service.transcribe(audio)
         assert service.model.transcribe.call_args[1]["fp16"] is False
 
+    def test_zh_transcribe_pins_simplified_script(self):
+        model = MagicMock()
+        model.transcribe.return_value = {"text": "你好"}
+        service = _make_service(model)
+        service.config.language = "zh"
+        service.transcribe(np.array([0.0, 0.5], dtype=np.float32))
+        assert service.model.transcribe.call_args[1]["initial_prompt"] == "以下是普通话的简体中文转写。"
+
+    def test_non_zh_transcribe_omits_initial_prompt(self):
+        model = MagicMock()
+        model.transcribe.return_value = {"text": "hello"}
+        service = _make_service(model)
+        service.config.language = "en"
+        service.transcribe(np.array([0.0, 0.5], dtype=np.float32))
+        assert "initial_prompt" not in service.model.transcribe.call_args[1]
+
     def test_transcribe_propagates_exception(self):
         model = MagicMock()
         model.transcribe.side_effect = RuntimeError("model error")

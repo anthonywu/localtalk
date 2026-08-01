@@ -86,10 +86,17 @@ class SpeechRecognitionService:
 
         # Use simpler transcribe call that worked before VAD
         # Too many parameters might cause issues
+        transcribe_kwargs: dict = {}
+        if self.config.language == "zh":
+            # Bias Whisper toward Simplified script and clean Mandarin
+            # punctuation; zh transcription can otherwise drift into
+            # Traditional characters, which the session directive forbids.
+            transcribe_kwargs["initial_prompt"] = "以下是普通话的简体中文转写。"
         result = self.model.transcribe(
             audio_data,
             language=self.config.language,
             fp16=False,  # Disable FP16 for compatibility
+            **transcribe_kwargs,
         )
 
         elapsed = time.time() - start_time
