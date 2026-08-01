@@ -12,6 +12,7 @@ SetStr = Callable[[str], dict]
 SetGeneration = Callable[..., dict]
 SetVad = Callable[..., dict]
 SetBrowserEngine = Callable[[str], dict]
+VoiceHelp = Callable[[], dict]
 
 
 def make_set_show_reasoning_tool(set_show: SetBool) -> ToolSpec:
@@ -454,6 +455,34 @@ def _as_bool(raw: Any, name: str) -> bool:
     if isinstance(raw, str):
         return raw.strip().lower() in {"true", "1", "yes", "on"}
     raise TypeError(f"{name} must be a boolean")
+
+
+def make_voice_help_tool(voice_help: VoiceHelp) -> ToolSpec:
+    """In-session tool that reports available voice tiers + upgrade steps.
+
+    Shares the assistant's ``_tool_voice_help`` helper with the ``usage``/``help``
+    direct command, so the model can surface premium voices conversationally
+    (e.g. when asked 'can you sound more natural?').
+    """
+
+    def handler(args: dict) -> dict:
+        return voice_help()
+
+    return ToolSpec(
+        name="voice_help",
+        description=build_tool_description(
+            "voice_help",
+            (
+                "Tell the user about available speech voices and how to get higher-quality ones. "
+                "Use when the user asks about voice options, better/natural/premium/enhanced voices, "
+                "or says 'usage' or 'help'. Returns the active voice tier and the steps to download "
+                "an Enhanced or Premium voice. Takes no arguments."
+            ),
+            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: r.get("spoken") or "Sorry, I couldn't fetch voice info.",
+    )
 
 
 def _bool_fallback(label: str, on_word: str, off_word: str):

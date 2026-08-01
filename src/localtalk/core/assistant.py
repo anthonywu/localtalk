@@ -468,6 +468,7 @@ class VoiceAssistant:
                     "set_tts_backend": self._tool_set_tts_backend,
                     "set_stt_model": self._tool_set_stt_model,
                     "set_vad_mode": self._tool_set_vad_mode,
+                    "voice_help": self._tool_voice_help,
                 }
             )
 
@@ -519,6 +520,63 @@ class VoiceAssistant:
         if self.config.tts_backend == "apple_speech":
             return self.config.apple_speech.silence_between_pieces_ms
         return self.config.chatterbox.silence_between_pieces_ms
+
+    def _best_installed_tier(self, language: str) -> str | None:
+        """Best Apple Speech quality tier installed for a language, or None.
+
+        Eloquence/character voices are skipped (novelty, not a quality upgrade).
+        Returns None if PyObjC/AVFoundation is unavailable so callers can degrade
+        gracefully instead of crashing when speech bindings are absent.
+        """
+        try:
+            from localtalk.services.apple_speech_tts import list_installed_voices
+        except RuntimeError:
+            return None
+        natural = [v for v in list_installed_voices(language) if not v.is_eloquence]
+        return max(natural, key=lambda v: v.quality).tier if natural else None
+
+    def _tool_voice_help(self) -> dict:
+        """Single source of truth for the in-session voice-usage message.
+
+        Shared by the ``usage``/``help`` direct command and the ``voice_help``
+        LLM tool. Reports the active voice tier and how to install a higher one.
+        """
+        active_tier = getattr(self.tts, "tier", None)
+        best_installed = self._best_installed_tier(self.config.apple_speech.language)
+        chinese = self.config.response_language == "Simplified Chinese"
+
+        if chinese:
+            active = f"你正在使用 {active_tier} 级别的语音。" if active_tier else ""
+            best = (
+                f"已安装的最高级别为 {best_installed}。"
+                if best_installed in {"Enhanced", "Premium"}
+                else "目前只有默认级别的语音。"
+            )
+            msg = (
+                f"{active}{best}苹果还提供更高质量的增强版和高级版语音。"
+                "运行 localtalk --list-voices 查看可用语音，然后在「系统设置 → 辅助功能 → "
+                "朗读内容 → 系统语音」里下载。重启后我会自动使用最高级别的语音。"
+            )
+        else:
+            active = f"You're on the {active_tier}-tier voice. " if active_tier else ""
+            best = (
+                f"Your best installed voice is {best_installed}-tier. "
+                if best_installed in {"Enhanced", "Premium"}
+                else "Only Default-tier voices are installed. "
+            )
+            msg = (
+                f"{active}{best}Higher-quality Enhanced and Premium voices are available from Apple. "
+                "Run 'localtalk --list-voices' to see them, then download one in System Settings → "
+                "Accessibility → Spoken Content → System Voices. I'll auto-select the best one on restart."
+            )
+        return {
+            "ok": True,
+            "message": msg.strip(),
+            "spoken": msg.strip(),
+            "backend": self.config.tts_backend,
+            "tier": active_tier,
+            "best_installed_tier": best_installed,
+        }
 
     def _set_session_language(self, language: str) -> None:
         """Update the active LLM instruction after an input/output language switch."""
@@ -1122,9 +1180,54 @@ class VoiceAssistant:
     def _process_text_response(self, user_input: str) -> None:
         """Generate and play response for text input."""
         print_user_utterance(self.console, user_input)
+        if self._handle_usage_command(user_input):
+            return
         if self._handle_direct_tts_backend_command(user_input):
             return
         self._respond(user_input, input_mode="text")
+
+    def _handle_usage_command(self, text: str) -> bool:
+        """Respond to 'usage' / 'help' / 'upgrade voices' with voice-tier info.
+
+        Aliases the words 'usage' and 'help' (plus voice-quality phrases) to the
+        shared ``_tool_voice_help`` helper, so the user hears about premium
+        voices without an LLM round-trip. Matching is conservative: a bare
+        'help me write code' falls through to the model, while 'help', 'usage',
+        'voices', or 'better voice' triggers the helper.
+        """
+        normalized = " ".join(text.casefold().replace("'", "").split())
+        standalone = normalized in {
+            "help",
+            "usage",
+            "voices",
+            "voice",
+            "upgrade",
+            "upgrade voices",
+            "voice help",
+            "voice usage",
+            "what voices",
+            "available voices",
+            "premium voices",
+            "better voices",
+            "better voice",
+            "list voices",
+            "show voices",
+            "voices please",
+        }
+        voice_word = "voice" in normalized or "voices" in normalized
+        quality_word = any(
+            w in normalized for w in ("premium", "enhanced", "better", "upgrade", "available", "quality")
+        )
+        help_word = any(w in normalized for w in ("help", "usage"))
+        combo = voice_word and (quality_word or help_word)
+        zh_voice = any(w in text for w in ("语音", "声音"))
+        zh_combo = zh_voice and any(w in text for w in ("帮助", "用法", "升级", "增强", "高级", "更好"))
+        if not (standalone or combo or zh_combo):
+            return False
+
+        result = self._tool_voice_help()
+        self._announce_spoken(result["spoken"])
+        return True
 
     def _handle_direct_tts_backend_command(self, text: str) -> bool:
         """Handle unambiguous voice-mode switches without relying on the LLM.
@@ -1247,6 +1350,8 @@ class VoiceAssistant:
             return
 
         print_user_utterance(self.console, text)
+        if self._handle_usage_command(text):
+            return
         if self._handle_direct_tts_backend_command(text):
             return
         self._respond(text, stt_time, input_mode="voice")

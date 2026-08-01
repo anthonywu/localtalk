@@ -18,6 +18,7 @@ from localtalk.services.tools.settings import (
     make_set_tts_backend_tool,
     make_set_tts_model_tool,
     make_set_vad_mode_tool,
+    make_voice_help_tool,
 )
 
 pytestmark = pytest.mark.unit
@@ -173,3 +174,26 @@ class TestSttTtsModelTools:
         assert tool.handler({"backend": "macos_tingting"})["ok"] is True
         assert calls == ["qwen_chinese", "macos_tingting"]
         assert tool.handler({"backend": "anything_else"})["ok"] is False
+
+
+class TestVoiceHelpTool:
+    def test_handler_calls_callback_and_returns_payload(self):
+        payload = {"ok": True, "spoken": "Premium voices available.", "tier": "Default"}
+        tool = make_voice_help_tool(lambda: payload)
+        assert tool.name == "voice_help"
+        # voice_help takes no arguments — handler ignores args
+        assert tool.handler({"ignored": True}) is payload
+
+    def test_spoken_fallback_reads_spoken_field(self):
+        tool = make_voice_help_tool(lambda: {"ok": True, "spoken": "You're on Default."})
+        assert tool.spoken_fallback({"ok": True, "spoken": "You're on Default."}, {}) == "You're on Default."
+
+    def test_spoken_fallback_handles_missing_result(self):
+        tool = make_voice_help_tool(lambda: {"ok": False})
+        assert "couldn't" in tool.spoken_fallback({"ok": False}, {})
+
+    def test_schema_has_no_required_parameters(self):
+        tool = make_voice_help_tool(lambda: {"ok": True, "spoken": "x"})
+        params = tool.description.parameters
+        assert params["properties"] == {}
+        assert params["required"] == []

@@ -431,6 +431,60 @@ class TestDirectTtsBackendCommand:
         assistant.tts.synthesize_long_form.assert_not_called()
 
 
+# ────────────────────────── _handle_usage_command / _tool_voice_help ──────────────────────────
+
+
+class TestVoiceHelpCommand:
+    def _make_assistant(self, *, tier="Default", best="Default"):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.tts.tier = tier
+        assistant._announce_spoken = MagicMock()
+        # _best_installed_tier hits AVFoundation; stub it to keep tests hermetic.
+        assistant._best_installed_tier = lambda _lang: best
+        return assistant
+
+    @pytest.mark.parametrize(
+        "text",
+        ["help", "usage", "voices", "better voice", "upgrade voices", "premium voices please"],
+    )
+    def test_aliases_trigger_the_shared_helper(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_usage_command(text) is True
+        assistant._announce_spoken.assert_called_once()
+        spoken = assistant._announce_spoken.call_args.args[0]
+        # The premium-voice upgrade path is always mentioned.
+        assert "Enhanced and Premium" in spoken or "增强版" in spoken
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "help me write a poem",  # 'help' but not voice-related
+            "what is the weather",  # unrelated
+            "tell me a joke",
+        ],
+    )
+    def test_unrelated_phrases_fall_through(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_usage_command(text) is False
+        assistant._announce_spoken.assert_not_called()
+
+    def test_voice_help_payload_shape_and_upgrade_hint(self):
+        assistant = self._make_assistant(tier="Default", best="Default")
+        result = assistant._tool_voice_help()
+        assert result["ok"] is True
+        assert result["tier"] == "Default"
+        assert result["best_installed_tier"] == "Default"
+        assert "--list-voices" in result["message"]
+        assert result["message"] == result["spoken"]
+
+    def test_voice_help_notes_when_premium_already_installed(self):
+        assistant = self._make_assistant(tier="Premium", best="Premium")
+        result = assistant._tool_voice_help()
+        assert result["tier"] == "Premium"
+        assert "Premium-tier" in result["message"]
+
+
 # ────────────────────────── _init_services ──────────────────────────
 
 

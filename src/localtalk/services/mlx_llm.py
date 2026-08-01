@@ -39,6 +39,7 @@ from localtalk.services.tools.settings import (
     make_set_tts_model_tool,
     make_set_tts_tool,
     make_set_vad_mode_tool,
+    make_voice_help_tool,
 )
 from localtalk.services.tools.web import make_web_search_tool
 from localtalk.services.tools.web_toggle import make_set_web_tools_tool
@@ -243,6 +244,8 @@ class MLXLanguageModelService:
             registry.register(make_set_stt_model_tool(set_stt_model))
         if (set_vad := self.session_control.get("set_vad_mode")) is not None:
             registry.register(make_set_vad_mode_tool(set_vad))
+        if (voice_help := self.session_control.get("voice_help")) is not None:
+            registry.register(make_voice_help_tool(voice_help))
 
         registry.register(make_acquire_knowledge_tool(self.knowledge_store, self.console.print))
         registry.register(make_query_knowledge_tool(self.knowledge_query, self.console.print))
