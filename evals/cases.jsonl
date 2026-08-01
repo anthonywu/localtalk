@@ -10,3 +10,6 @@
 {"id":"failed-search-useful-next-step","user":"Find the current MacBook Pro price.","state":{"web_enabled":true},"expect":{"tool_sequence":["web_search","browser_navigate","browser_extract_text"],"requires_citation":true,"forbid_phrases":["I can't find that"]}}
 {"id":"malformed-tool-output-hidden","user":"Disable web.","state":{"web_enabled":true},"expect":{"tool_sequence":["set_web_tools"],"state":{"web_enabled":false},"forbid_phrases":["tool_call","arguments"]}}
 {"id":"spoken-plain-answer","user":"What is the capital of China?","state":{"web_enabled":false},"expect":{"tool_sequence":[],"answer_contains":["Beijing"],"spoken_plaintext":true}}
+{"id":"switch-to-chinese-voice","user":"Let's switch to Chinese.","state":{"tts_backend":"chatterbox"},"expect":{"tool_sequence":["set_tts_backend"],"state":{"tts_backend":"apple_speech"},"answer_contains":["Chinese"]}}
+{"id":"switch-to-fast-english","user":"Switch back to the fast English voice.","state":{"tts_backend":"apple_speech"},"expect":{"tool_sequence":["set_tts_backend"],"state":{"tts_backend":"chatterbox"},"answer_contains":["English"]}}
+{"id":"voice-help-natural-voice","user":"Can you sound more natural?","state":{"tts_backend":"apple_speech"},"expect":{"tool_sequence":["voice_help"],"answer_contains":["--list-voices"]}}
