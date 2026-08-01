@@ -63,3 +63,7 @@ dmypy.json
 
 # uv
 uv.lock
+
+# Plans
+plan/
+.claude/
