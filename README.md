@@ -36,6 +36,18 @@ Tingting is rendered through Apple's modern [Speech Synthesis API](https://devel
 
 Built with speech recognition (Whisper), language model processing (gpt-oss/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
 
+### Higher-Quality Voices
+
+Apple ships `AVSpeechSynthesizer` voices in three quality tiers — **Default**, **Enhanced**, and **Premium** — where Enhanced/Premium sound noticeably more natural but must be downloaded separately. LocalTalk auto-selects the highest-quality *natural* voice installed for the configured language (eloquence/character voices are deprioritized). So once you download a Premium Tingting, LocalTalk uses it automatically on the next start — no config change needed.
+
+To see what's installed and get download guidance, run:
+
+```bash
+localtalk --list-voices
+```
+
+To download a higher tier: open **System Settings → Accessibility → Spoken Content → System Voices** (some voices also appear under System Settings → Keyboard → Dictation) and install an Enhanced or Premium voice. To pin a specific voice explicitly, set `voice_identifier` in `AppleSpeechConfig` (the identifier is shown by `--list-voices`).
+
 ## Why "LocalTalk"?
 
 The name "LocalTalk" is a playful homage to [Apple's classic LocalTalk networking protocol](https://en.wikipedia.org/wiki/LocalTalk) from the 1980s. Just as the original LocalTalk enabled local network communication between Apple devices without needing external infrastructure, our LocalTalk enables local AI conversations without needing external cloud services.
