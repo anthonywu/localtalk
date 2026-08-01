@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>localtalk — an offline voice assistant for your Mac</title>
+  <meta name="description" content="A privacy-first voice assistant that runs entirely offline on Apple Silicon. Built for DIYers, educators, parents, and learners. No accounts, no cloud, no tracking." />
+  <meta property="og:title" content="localtalk — an offline voice assistant for your Mac" />
+  <meta property="og:description" content="Listens, reasons, and speaks — entirely offline on Apple Silicon. 100% private. Zero API keys." />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%BB%F0%9F%8E%A4%F0%9F%94%8A%3C/text%3E%3C/svg%3E" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"SFMono-Regular"', '"SF Mono"', 'Menlo', 'Consolas', 'monospace'],
+          },
+          colors: {
+            ink: '#1d1d1f',
+            sub: '#6e6e73',
+            mist: '#f5f5f7',
+            line: '#d2d2d7',
+            apple: '#0071e3',
+            appleh: '#0077ed',
+            term: '#1b1b1f',
+          },
+          boxShadow: {
+            soft: '0 4px 24px -8px rgba(0,0,0,0.12)',
+            card: '0 1px 2px rgba(0,0,0,0.04), 0 8px 24px -12px rgba(0,0,0,0.10)',
+          },
+          keyframes: {
+            fadeUp: { '0%': { opacity: '0', transform: 'translateY(14px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            blink: { '0%,100%': { opacity: '1' }, '50%': { opacity: '0' } },
+            pulse2: { '0%,100%': { opacity: '0.35' }, '50%': { opacity: '1' } },
+          },
+          animation: {
+            fadeUp: 'fadeUp .7s cubic-bezier(.22,.61,.36,1) both',
+            blink: 'blink 1.1s step-end infinite',
+            pulse2: 'pulse2 1.4s ease-in-out infinite',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html { scroll-padding-top: 5rem; }
+    .reveal { animation: fadeUp .7s cubic-bezier(.22,.61,.36,1) both; }
+    .reveal-d1 { animation-delay: .08s; }
+    .reveal-d2 { animation-delay: .16s; }
+    .reveal-d3 { animation-delay: .24s; }
+    .reveal-d4 { animation-delay: .32s; }
+    .text-balance { text-wrap: balance; }
+    .bg-grid {
+      background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.05) 1px, transparent 0);
+      background-size: 28px 28px;
+    }
+  </style>
+</head>
+<body class="font-sans bg-white text-ink antialiased selection:bg-apple/15">
+
+  <nav class="sticky top-0 z-50 backdrop-blur-xl bg-white/70 border-b border-line/60">
+    <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="#top" class="flex items-center gap-2 font-semibold tracking-tight">
+        <span class="text-lg">💻🎤🔊</span>
+        <span class="text-[17px]">localtalk</span>
+      </a>
+      <div class="hidden md:flex items-center gap-8 text-[14px] text-sub">
+        <a href="#features" class="hover:text-ink transition">Features</a>
+        <a href="#install" class="hover:text-ink transition">Install</a>
+        <a href="#philosophy" class="hover:text-ink transition">Philosophy</a>
+        <a href="#why" class="hover:text-ink transition">Why</a>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="https://github.com/anthonywu/localtalk" class="hidden sm:inline-flex items-center gap-1.5 text-[14px] text-sub hover:text-ink transition">
+          <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          GitHub
+        </a>
+        <a href="#install" class="inline-flex items-center rounded-full bg-apple hover:bg-appleh transition text-white text-[14px] font-medium px-4 py-2 shadow-soft">
+          Get started
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+
+    <section class="relative overflow-hidden bg-grid">
+      <div class="absolute inset-0 bg-gradient-to-b from-white/0 via-white/40 to-white pointer-events-none"></div>
+      <div class="relative max-w-6xl mx-auto px-6 pt-20 pb-24 md:pt-28 md:pb-32 grid lg:grid-cols-2 gap-14 items-center">
+        <div>
+          <p class="reveal text-[13px] font-medium tracking-wide text-apple uppercase mb-5">Fully offline · 100% private · Apple-native</p>
+          <h1 class="reveal reveal-d1 text-balance text-[44px] md:text-[60px] leading-[1.04] font-semibold tracking-tight">
+            A voice assistant that never leaves your Mac.
+          </h1>
+          <p class="reveal reveal-d2 mt-6 text-[19px] leading-relaxed text-sub max-w-xl text-balance">
+            <span class="text-ink font-medium">localtalk</span> listens, reasons, and speaks — entirely offline on Apple Silicon. Built for DIYers, educators, parents, and learners who want an assistant they can understand, modify, and trust.
+          </p>
+
+          <div class="reveal reveal-d3 mt-9 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div class="flex items-center gap-2 rounded-xl bg-mist border border-line pl-4 pr-2 py-2 font-mono text-[15px] w-full sm:w-auto">
+              <span class="text-sub select-none">$</span>
+              <span class="whitespace-nowrap">uv tool install localtalk</span>
+              <button data-copy="uv tool install localtalk" class="ml-auto rounded-md px-2 py-1 text-sub hover:text-ink hover:bg-white transition" aria-label="Copy install command">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+            </div>
+            <a href="https://github.com/anthonywu/localtalk" class="inline-flex items-center justify-center rounded-xl border border-line bg-white hover:bg-mist transition text-[15px] font-medium px-5 py-3">
+              View on GitHub
+            </a>
+          </div>
+          <p class="reveal reveal-d4 mt-4 text-[13px] text-sub">Or try it instantly, no install: <code class="font-mono bg-mist border border-line rounded px-1.5 py-0.5">uvx localtalk</code></p>
+        </div>
+
+        <div class="reveal reveal-d2 relative">
+          <div class="absolute -inset-6 bg-gradient-to-tr from-apple/10 via-transparent to-transparent blur-2xl rounded-[2rem]"></div>
+          <div class="relative rounded-2xl bg-term text-white/90 shadow-2xl overflow-hidden ring-1 ring-black/10">
+            <div class="flex items-center gap-2 px-4 h-10 bg-white/5 border-b border-white/10">
+              <span class="w-3 h-3 rounded-full bg-[#ff5f57]"></span>
+              <span class="w-3 h-3 rounded-full bg-[#febc2e]"></span>
+              <span class="w-3 h-3 rounded-full bg-[#28c840]"></span>
+              <span class="ml-3 text-[12px] text-white/40 font-mono">localtalk — Terminal</span>
+            </div>
+            <pre class="px-5 py-5 font-mono text-[13.5px] leading-relaxed whitespace-pre-wrap"><span class="text-white/50">$ localtalk</span>
+<span class="text-[#28c840]">✓</span> Whisper <span class="text-white/40">turbo</span> ready
+<span class="text-[#28c840]">✓</span> gpt-oss-20b <span class="text-white/40">MLX</span> ready
+<span class="text-[#28c840]">✓</span> ChatterBox Turbo ready
+<span class="text-[#5ea4ff]">●</span> Listening… <span class="text-white/40">(VAD auto)</span>
+
+<span class="text-white/60">▏▎▍▌▋▊▉▉▊▋▌▍▎▏▎▍▌▋▊▉</span> <span class="animate-pulse2 text-white/40">live mic</span>
+
+<span class="text-white/50">› "How do I say hello in Mandarin?"</span>
+<span class="text-white/50">» You'd say</span> <span class="text-[#5ea4ff]">你好 (nǐ hǎo)</span><span class="text-white/50">…</span><span class="inline-block w-2 h-4 align-middle bg-white/70 animate-blink ml-0.5"></span></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-y border-line/70 bg-mist/60">
+      <div class="max-w-6xl mx-auto px-6 py-16 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <article class="rounded-2xl bg-white border border-line p-6 shadow-card hover:-translate-y-0.5 transition">
+          <div class="text-2xl mb-3">📡</div>
+          <h3 class="font-semibold tracking-tight">Fully offline</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Turn off WiFi. It still listens, reasons, and speaks. Core STT/LLM/TTS never touch the network.</p>
+        </article>
+        <article class="rounded-2xl bg-white border border-line p-6 shadow-card hover:-translate-y-0.5 transition">
+          <div class="text-2xl mb-3">🔒</div>
+          <h3 class="font-semibold tracking-tight">100% private</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Your conversations never leave the device. No accounts, no telemetry, no third-party calls.</p>
+        </article>
+        <article class="rounded-2xl bg-white border border-line p-6 shadow-card hover:-translate-y-0.5 transition">
+          <div class="text-2xl mb-3">🚫</div>
+          <h3 class="font-semibold tracking-tight">Zero API keys</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">No API bills to rack up. Hand it to a student or a kid and let curiosity run — it costs only electricity.</p>
+        </article>
+        <article class="rounded-2xl bg-white border border-line p-6 shadow-card hover:-translate-y-0.5 transition">
+          <div class="text-2xl mb-3"></div>
+          <h3 class="font-semibold tracking-tight">Apple-native</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">AVFoundation Speech, on-device Foundation Models on macOS 27, and the free native <em>Tingting</em> voice.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="features" class="max-w-6xl mx-auto px-6 py-24">
+      <div class="max-w-2xl mb-14">
+        <p class="text-[13px] font-medium tracking-wide text-apple uppercase mb-3">Features</p>
+        <h2 class="text-balance text-[34px] md:text-[44px] font-semibold tracking-tight leading-tight">Everything you'd want from a modern assistant. Without the cloud.</h2>
+        <p class="mt-4 text-[17px] text-sub leading-relaxed">A real end-to-end voice loop — speech recognition, reasoning, and natural speech synthesis, all running on your machine.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">⚡</div>
+          <h3 class="font-medium tracking-tight">Sentence-streamed speech</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">It speaks the first finished sentence the moment the model produces it — no waiting for the whole reply to synthesize.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">🎙️</div>
+          <h3 class="font-medium tracking-tight">Auto-listen VAD</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Silero VAD detects when you start and stop speaking. No button-pressing — just talk.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">📊</div>
+          <h3 class="font-medium tracking-tight">Live waveform</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">A real-time Unicode waveform shows your mic levels as you speak, so you always know it's hearing you.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">🧠</div>
+          <h3 class="font-medium tracking-tight">Mid-session reasoning</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Say “think harder” or “think faster” and it adjusts its own reasoning level on the fly — no restart needed.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">📚</div>
+          <h3 class="font-medium tracking-tight">Offline knowledge packs</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Ask it to download Simple English Wikipedia into your cache, then query it offline — great for classrooms and travel.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">🌐</div>
+          <h3 class="font-medium tracking-tight">Online tools, opt-in</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">When you're online, web search and a local browser turn on automatically. Say “disable web” anytime — only tools leave the machine.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">💬</div>
+          <h3 class="font-medium tracking-tight">Type or speak</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">Dual input: press Esc during auto-listen to switch to the keyboard, Esc again to go back to voice.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">🌏</div>
+          <h3 class="font-medium tracking-tight">Bilingual voices</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">ChatterBox Turbo for English, plus the free native <em>Tingting</em> and optional Qwen3-TTS for Mandarin Chinese.</p>
+        </div>
+        <div class="rounded-2xl border border-line p-6 hover:shadow-card transition">
+          <div class="text-xl mb-3">🕒</div>
+          <h3 class="font-medium tracking-tight">Datetime-aware persona</h3>
+          <p class="mt-1.5 text-[14px] text-sub leading-relaxed">A warm default persona that knows what “today” is, overridable with your own prompt file or inline text.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="bg-mist/60 border-y border-line/70">
+      <div class="max-w-3xl mx-auto px-6 py-24 text-center">
+        <p class="text-[13px] font-medium tracking-wide text-apple uppercase mb-3">Quick start</p>
+        <h2 class="text-balance text-[34px] md:text-[44px] font-semibold tracking-tight leading-tight">One command. Then just talk.</h2>
+        <p class="mt-4 text-[17px] text-sub leading-relaxed">Models download automatically on first run and cache locally for offline use. No manual setup.</p>
+
+        <div class="mt-10 inline-flex items-center gap-2 rounded-xl bg-term text-white px-5 py-3.5 font-mono text-[15px] shadow-soft">
+          <span class="text-white/40 select-none">$</span>
+          <span>uv tool install localtalk</span>
+          <button data-copy="uv tool install localtalk" class="ml-2 rounded-md px-2 py-1 text-white/60 hover:text-white hover:bg-white/10 transition" aria-label="Copy">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        <p class="mt-5 text-[14px] text-sub">then run <code class="font-mono bg-white border border-line rounded px-1.5 py-0.5">localtalk</code></p>
+
+        <div class="mt-12 grid sm:grid-cols-3 gap-4 text-left">
+          <div class="rounded-xl bg-white border border-line p-5">
+            <p class="text-[12px] uppercase tracking-wide text-sub mb-1">Needs</p>
+            <p class="text-[14px] leading-relaxed">macOS on Apple Silicon · Python 3.11+</p>
+          </div>
+          <div class="rounded-xl bg-white border border-line p-5">
+            <p class="text-[12px] uppercase tracking-wide text-sub mb-1">System dep</p>
+            <p class="text-[14px] leading-relaxed"><code class="font-mono text-[13px]">libsndfile</code> for TTS</p>
+          </div>
+          <div class="rounded-xl bg-white border border-line p-5">
+            <p class="text-[12px] uppercase tracking-wide text-sub mb-1">Secrets</p>
+            <p class="text-[14px] leading-relaxed">None. No API keys, ever.</p>
+          </div>
+        </div>
+        <p class="mt-8 text-[13px] text-sub">Full options and developer setup in the <a href="https://github.com/anthonywu/localtalk#readme" class="text-apple hover:underline">README</a>.</p>
+      </div>
+    </section>
+
+    <section id="philosophy" class="max-w-6xl mx-auto px-6 py-24">
+      <div class="max-w-2xl mb-14">
+        <p class="text-[13px] font-medium tracking-wide text-apple uppercase mb-3">Design philosophy</p>
+        <h2 class="text-balance text-[34px] md:text-[44px] font-semibold tracking-tight leading-tight">Deliberate scope, a few strong opinions.</h2>
+      </div>
+      <div class="grid md:grid-cols-2 gap-5">
+        <article class="rounded-2xl border border-line p-7 bg-white">
+          <h3 class="font-medium tracking-tight text-lg">Apple-native, end to end</h3>
+          <p class="mt-2 text-[15px] text-sub leading-relaxed">All Apple platform capabilities are in scope. Where an Apple API — AVFoundation Speech, on-device Foundation Models, the <em>Tingting</em> voice — beats a cross-platform library, localtalk prefers it.</p>
+        </article>
+        <article class="rounded-2xl border border-line p-7 bg-white">
+          <h3 class="font-medium tracking-tight text-lg">macOS-first, latest-first</h3>
+          <p class="mt-2 text-[15px] text-sub leading-relaxed">We optimize for the newest macOS and adopt new platform features as soon as they land. Older releases get best-effort fallbacks, not release blocks. Linux is in scope, but not prioritized.</p>
+        </article>
+        <article class="rounded-2xl border border-line p-7 bg-white">
+          <h3 class="font-medium tracking-tight text-lg">Terminal-first, terminal-only</h3>
+          <p class="mt-2 text-[15px] text-sub leading-relaxed">A GUI is explicitly out of scope. Keeping the interface textual keeps the iteration loop tight — the same CLI a human drives is what runs the tests and evals. Want a GUI? Wrap the CLI.</p>
+        </article>
+        <article class="rounded-2xl border border-line p-7 bg-white">
+          <h3 class="font-medium tracking-tight text-lg">Built for tinkerers &amp; learners</h3>
+          <p class="mt-2 text-[15px] text-sub leading-relaxed">For DIYers, educators, parents, and learners who want to understand and modify — not just consume. Zero accounts, one-command install, everything inspectable on disk.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="why" class="bg-mist/60 border-y border-line/70">
+      <div class="max-w-3xl mx-auto px-6 py-24">
+        <p class="text-[13px] font-medium tracking-wide text-apple uppercase mb-3">Why "LocalTalk"?</p>
+        <h2 class="text-balance text-[34px] md:text-[44px] font-semibold tracking-tight leading-tight">An homage, on two levels.</h2>
+        <div class="mt-6 space-y-5 text-[17px] leading-relaxed text-sub">
+          <p>The name is a playful nod to <a href="https://en.wikipedia.org/wiki/LocalTalk" class="text-ink hover:text-apple underline decoration-line underline-offset-2">Apple's classic LocalTalk networking protocol</a> from the 1980s. Just as the original LocalTalk connected Apple devices without external infrastructure, this LocalTalk carries on AI conversations without external cloud services.</p>
+          <p>It works on two levels: <span class="text-ink font-medium">Local</span> — everything runs on your Mac, no internet required after setup. And <span class="text-ink font-medium">Talk</span> — it's literally a talking app that listens and responds with voice. The perfect name for an offline assistant in the Apple tradition of powerful, self-contained technology.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="max-w-3xl mx-auto px-6 py-24 text-center">
+      <h2 class="text-balance text-[32px] md:text-[40px] font-semibold tracking-tight leading-tight">Hand it to a kid. Turn off the WiFi. Let it talk.</h2>
+      <div class="mt-8 inline-flex items-center gap-2 rounded-xl bg-term text-white px-5 py-3.5 font-mono text-[15px] shadow-soft">
+        <span class="text-white/40 select-none">$</span>
+        <span>uvx localtalk</span>
+        <button data-copy="uvx localtalk" class="ml-2 rounded-md px-2 py-1 text-white/60 hover:text-white hover:bg-white/10 transition" aria-label="Copy">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="border-t border-line">
+    <div class="max-w-6xl mx-auto px-6 py-12 grid md:grid-cols-3 gap-8 text-[14px]">
+      <div>
+        <div class="flex items-center gap-2 font-semibold tracking-tight">
+          <span>💻🎤🔊</span><span>localtalk</span>
+        </div>
+        <p class="mt-2 text-sub leading-relaxed">An offline voice assistant for Apple Silicon. Alpha software — usable, still polishing.</p>
+      </div>
+      <div class="flex flex-col gap-2 text-sub">
+        <span class="text-ink font-medium">Project</span>
+        <a href="https://github.com/anthonywu/localtalk" class="hover:text-ink transition">GitHub</a>
+        <a href="https://pypi.org/project/localtalk/" class="hover:text-ink transition">PyPI</a>
+        <a href="https://github.com/anthonywu/localtalk/issues" class="hover:text-ink transition">Issues</a>
+      </div>
+      <div class="flex flex-col gap-2 text-sub">
+        <span class="text-ink font-medium">Open source</span>
+        <span>MIT License</span>
+        <span>Built with MLX, Whisper, ChatterBox &amp; PyObjC.</span>
+      </div>
+    </div>
+    <div class="border-t border-line/70">
+      <div class="max-w-6xl mx-auto px-6 py-5 text-[12px] text-sub">© 2026 localtalk contributors.</div>
+    </div>
+  </footer>
+
+  <script>
+    document.querySelectorAll('[data-copy]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy');
+        var done = function () { btn.classList.add('text-apple'); setTimeout(function () { btn.classList.remove('text-apple'); }, 900); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, done);
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta); done();
+        }
+      });
+    });
+  </script>
+</body>
+</html>
