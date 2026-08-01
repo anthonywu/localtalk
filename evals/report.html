@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LocalTalk behavioral eval report</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #102a43;
+      --muted: #627d98;
+      --line: #d9e2ec;
+      --canvas: #f0f4f8;
+      --card: #ffffff;
+      --green: #137752;
+      --green-bg: #e6f6ee;
+      --amber: #8a5d00;
+      --amber-bg: #fff4cf;
+      --blue: #175cd3;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }
+    h1, h2 { line-height: 1.15; }
+    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3.25rem); }
+    h2 { margin: 32px 0 14px; font-size: 1.25rem; }
+    .lede { max-width: 700px; color: var(--muted); margin: 0; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 28px 0; }
+    .card, .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+    .card { padding: 20px; }
+    .metric { display: block; font-size: 2rem; font-weight: 750; line-height: 1; margin-bottom: 7px; }
+    .label { color: var(--muted); font-size: .9rem; }
+    .panel { padding: 20px; }
+    .status { display: inline-block; border-radius: 999px; font-size: .8rem; font-weight: 700; letter-spacing: .02em; padding: 3px 10px; }
+    .pass { color: var(--green); background: var(--green-bg); }
+    .pending { color: var(--amber); background: var(--amber-bg); }
+    table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+    th, td { border-bottom: 1px solid var(--line); padding: 11px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    code { background: #eef2f6; border-radius: 4px; font-size: .88em; padding: 2px 5px; }
+    a { color: var(--blue); }
+    .note { border-left: 4px solid #f0b429; padding-left: 14px; color: #5f4b18; }
+    @media (max-width: 650px) { .grid { grid-template-columns: 1fr; } main { padding-top: 32px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="status pass">Fixture contract run passed</p>
+      <h1>LocalTalk behavioral eval report</h1>
+      <p class="lede">Baseline report for the first twelve agent-behavior contracts. Generated from the local fixture validation run on August 1, 2026.</p>
+    </header>
+
+    <section class="grid" aria-label="Summary">
+      <article class="card"><span class="metric">12 / 12</span><span class="label">Fixture contract traces passing</span></article>
+      <article class="card"><span class="metric">4 / 4</span><span class="label">Eval-scorer tests passing</span></article>
+      <article class="card"><span class="metric">365 / 365</span><span class="label">Default project tests passing</span></article>
+    </section>
+
+    <section class="panel">
+      <h2>What has passed</h2>
+      <ul>
+        <li>The JSONL case manifest has twelve unique, well-formed contracts.</li>
+        <li>The offline evaluator accepts valid traces and reports tool, citation, and state failures.</li>
+        <li><code>uv run pytest</code> completed with 365 passing tests.</li>
+        <li><code>uv run ruff check .</code> completed without findings.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Behavioral case status</h2>
+      <p class="note">These are deterministic fixture traces that run through LocalTalk's tool loop. They verify dispatch, state transitions, history capture, and scoring. They do not yet measure whether an unmocked MLX or Apple model independently chooses the correct tool.</p>
+      <table>
+        <thead><tr><th>Case</th><th>Expected observable behavior</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><code>offline-fact-search-get</code></td><td>Offline search then read, with a spoken citation</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>offline-fact-no-pack</code></td><td>Offer or acquire offline knowledge without web search</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>web-enable-live-weather</code></td><td>Enable web, search once, cite current weather</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>live-price-web-on</code></td><td>Use live search for a current product price</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>disable-web</code></td><td>Turn online tools off and confirm state</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>enable-web</code></td><td>Turn online tools on and confirm state</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>raise-reasoning</code></td><td>Set high reasoning effort</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>text-only</code></td><td>Disable text-to-speech</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>switch-browser</code></td><td>Switch browser engine to Safari</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>failed-search-useful-next-step</code></td><td>Recover from a failed search through browser tools</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>malformed-tool-output-hidden</code></td><td>Never speak malformed tool JSON</td><td><span class="status pass">Fixture pass</span></td></tr>
+          <tr><td><code>spoken-plain-answer</code></td><td>Give a plain, speakable response without tools</td><td><span class="status pass">Fixture pass</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Next run</h2>
+      <p>Capture one JSON object per case with <code>id</code>, <code>tool_calls</code>, <code>answer</code>, and <code>state</code>, then run:</p>
+      <p><code>uv run python evals/evaluate.py evals/cases.jsonl path/to/run.jsonl</code></p>
+      <p>See <a href="README.md">the eval README</a> for the trace format and how to retain auditable results.</p>
+    </section>
+  </main>
+</body>
+</html>

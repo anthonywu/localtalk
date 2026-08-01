@@ -28,6 +28,19 @@ The evaluator exits nonzero for a failed case and prints individual failures.
 Run the suite for every supported provider, model identifier, and prompt
 revision. Keep the raw traces with that run so a score remains auditable.
 
+## Fixture contract run
+
+Run the deterministic tool-loop contract suite with no model download, browser,
+or network access:
+
+```bash
+uv run python evals/run_fixture_evals.py
+```
+
+It writes `evals/fixture-results.jsonl` and scores all twelve traces. The
+fixtures validate LocalTalk's dispatch, state, history, and trace paths; they
+do not measure whether an unmocked local model independently selects tools.
+
 ## What this does not replace
 
 The existing `tests/unit/` suite remains the place for deterministic runtime
