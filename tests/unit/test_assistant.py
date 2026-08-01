@@ -111,6 +111,7 @@ def _make_assistant_stub(config=None):
     assistant.metrics = MetricsStore()
     assistant._playback_stop = __import__("threading").Event()
     assistant._tts_cached = None
+    assistant._tts_cached_backend = "chatterbox"
     return assistant
 
 
@@ -225,6 +226,40 @@ class TestSttTtsModelHotSwap:
         assert result["ok"] is False
         assert assistant.config.chatterbox.model_id == "old-model"
 
+    def test_set_tts_backend_loads_qwen_chinese(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.qwen_tts.QwenTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_backend("qwen_chinese")
+        assert result["ok"] is True
+        assert result["backend"] == "qwen_chinese"
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "qwen_chinese"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        ctor.assert_called_once()
+
+    def test_set_tts_backend_loads_macos_tingting(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.macos_say_tts.MacOSSayTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_backend("macos_tingting")
+        assert result["ok"] is True
+        assert result["backend"] == "macos_tingting"
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "macos_say"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        ctor.assert_called_once()
+
 
 # ────────────────────────── _init_services ──────────────────────────
 
@@ -289,6 +324,33 @@ class TestProcessTextResponse:
         assert assistant.audio.play_audio.call_args.kwargs.get("trail_silence_ms") == float(
             assistant.config.chatterbox.silence_between_pieces_ms
         )
+
+    def test_switch_to_chinese_is_handled_before_llm(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True, "backend": "macos_tingting"})
+
+        assistant._process_text_response("Let's switch to Chinese")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+        assert not assistant.llm.generate_response.called
+
+    def test_switch_to_chinese_defaults_to_macos_tingting(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(
+            return_value={"ok": True, "backend": "macos_tingting"}
+        )
+
+        assistant._process_text_response("Let's switch to Chinese")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+
+    def test_switch_to_qwen_chinese_is_handled_before_llm(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True, "backend": "qwen_chinese"})
+
+        assistant._process_text_response("Use Qwen Chinese voice")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("qwen_chinese")
 
     def test_with_save_audio_writes_each_tts_chunk(self, tmp_path):
         tts = MagicMock()

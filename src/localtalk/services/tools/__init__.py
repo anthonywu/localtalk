@@ -15,6 +15,7 @@ SESSION_SETTING_TOOLS = (
     "set_stats",
     "set_tts",
     "set_tts_model",
+    "set_tts_backend",
     "set_stt_model",
     "set_vad_mode",
     "set_browser_engine",

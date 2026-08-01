@@ -26,7 +26,7 @@ class SpeechRecognitionService:
             self.console.print("[dim]Warming up Whisper model...[/dim]")
             dummy_audio = np.zeros(8000, dtype=np.float32)  # 0.5 seconds
             try:
-                _ = model.transcribe(dummy_audio, language="en", temperature=0, fp16=False)
+                _ = model.transcribe(dummy_audio, language=self.config.language, temperature=0, fp16=False)
             except Exception as e:
                 self.console.print(f"[dim]Whisper warmup skipped: {e}[/dim]")
 

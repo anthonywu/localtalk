@@ -1,6 +1,6 @@
 [project]
 name = "localtalk"
-version = "0.8.0"
+version = "0.9.0"
 description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,12 +37,12 @@ dependencies = [
     "einops>=0.8.0",  # via mlx-audio
     "hf-transfer>=0.1.9",  # direct; also via mlx-audio
     "httpx>=0.28.0",
-    "huggingface-hub>=0.36.0,<1.0",  # direct; also via mlx-audio, mlx-lm, mlx-vlm, transformers
+    "huggingface-hub>=1.0,<2.0",  # direct; required by mlx-audio >=0.4.6
     "librosa>=0.11.0",  # via mlx-audio
     "libzim>=3.8.0",
     "mistune>=3.2.0,<4.0",  # direct
     "mlx>=0.32.0",  # direct; also via mlx-audio, mlx-lm, mlx-vlm
-    "mlx-audio>=0.2.9",  # direct
+    "mlx-audio>=0.4.6",  # direct; Qwen3-TTS MLX backend and current ChatterBox support
     "mlx-lm>=0.29.1",  # direct; also via mlx-vlm
     "mlx-vlm>=0.3.9",  # direct
     "numpy>=2.0,<2.3.0",  # direct; restricted by opencv-python (via mlx-vlm)

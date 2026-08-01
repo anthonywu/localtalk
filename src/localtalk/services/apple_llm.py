@@ -37,6 +37,7 @@ from localtalk.services.tools.settings import (
     make_set_show_reasoning_tool,
     make_set_stats_tool,
     make_set_stt_model_tool,
+    make_set_tts_backend_tool,
     make_set_tts_model_tool,
     make_set_tts_tool,
     make_set_vad_mode_tool,
@@ -261,6 +262,8 @@ class AppleFoundationModelService:
             registry.register(make_set_tts_tool(set_tts))
         if (set_tts_model := self.session_control.get("set_tts_model")) is not None:
             registry.register(make_set_tts_model_tool(set_tts_model))
+        if (set_tts_backend := self.session_control.get("set_tts_backend")) is not None:
+            registry.register(make_set_tts_backend_tool(set_tts_backend))
         if (set_stt_model := self.session_control.get("set_stt_model")) is not None:
             registry.register(make_set_stt_model_tool(set_stt_model))
         if (set_vad := self.session_control.get("set_vad_mode")) is not None:

@@ -18,7 +18,7 @@ Plenty of alternative projects exist, but `localtalk` aims for the best one line
 
 ### Why Not Use Apple's Built-in "Say" Command?
 
-We deliberately chose not to use macOS's built-in `say` command for text-to-speech. While it's readily available and requires no setup, the voice quality is too robotic to meet today's user expectations. After being exposed to natural-sounding AI voices from services like ElevenLabs and OpenAI, users expect conversational AI to sound human-like. The `say` command's 1990s-era voice synthesis would make the assistant feel outdated and diminish the user experience, so it wasn't worth implementing as an option.
+LocalTalk uses ChatterBox Turbo for its default English voice. For Chinese, it can use macOS's built-in, free `say` voice **Tingting** with no model download. The larger local Qwen3-TTS model remains available as an optional higher-quality Chinese voice.
 
 Apple's newer [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) offers much higher quality voices that could be a great fit for this project. However, we're waiting for proper Python library support to integrate it. Once Python bindings become available, we'll add support for these modern Apple voices as another local TTS option.
 
@@ -47,7 +47,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
 - 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
 - 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
-- 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
+- 🔊 **Local TTS**: ChatterBox Turbo for English, free native macOS Tingting for Chinese, plus an optional Qwen3-TTS Chinese voice
 - 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
 - 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
 - 🕒 **Datetime-Aware Persona**: A warm default persona in [`prompts/default.txt`](prompts/default.txt), automatically augmented with the current date and time so the assistant knows "today"
@@ -179,6 +179,12 @@ localtalk --no-tts
 localtalk --save-audio
 ```
 
+During a session, say "switch to the Chinese voice" or "let's switch to Chinese" to switch to the free native macOS
+**Tingting** voice. It needs no model download. Say "use Qwen Chinese voice" to use the optional local
+`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit` model instead. Say "switch to the fast English voice"
+to return to ChatterBox Turbo. A Chinese voice switch also sets Whisper's input language to Chinese (`zh`) so
+Chinese speech is transcribed as Chinese rather than forced through the English decoder.
+
 ### Disabling Progress Bars
 
 If you prefer to disable progress bar output during model loading, set the environment variable:
@@ -267,7 +273,7 @@ Everything runs locally on your Mac!
 
 - ✅ **Whisper**: Runs locally, no API key needed
 - ✅ **MLX-LM**: Runs locally on Apple Silicon, no API key needed
-- ✅ **ChatterBox Turbo**: Runs locally, no API key needed
+- ✅ **ChatterBox Turbo and macOS Tingting**: Run locally, no API key needed
 
 ## Advanced Usage
 
@@ -405,7 +411,7 @@ MIT License - see LICENSE file for details.
 
 ### Language Support
 
-Currently, LocalTalk supports English (American and British accents). **Chinese language support is coming next**, with other major world languages to follow. The underlying models (Whisper, gpt-oss, and ChatterBox) already have multilingual capabilities - we just need to wire up the language detection and configuration.
+LocalTalk supports English by default and can switch a session to Simplified Chinese with Tingting or Qwen3-TTS. Other major world languages are future work.
 
 **Contributors welcome!** If you'd like to help add support for your language, please check our [Issues](https://github.com/anthonywu/localtalk/issues) page or submit a PR. Language additions mainly involve:
 

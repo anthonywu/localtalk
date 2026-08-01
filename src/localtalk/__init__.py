@@ -3,6 +3,21 @@
 import os
 import warnings
 
+
+def _migrate_deprecated_hf_transfer_env() -> None:
+    """Translate Hugging Face's retired transfer flag before it is imported.
+
+    ``huggingface_hub`` 1.x no longer uses ``hf_transfer`` and emits a
+    FutureWarning when the old flag is inherited from a shell profile. Xet is
+    its supported replacement for high-performance transfers.
+    """
+    legacy_value = os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+    if legacy_value and legacy_value.casefold() in {"1", "on", "true", "yes"}:
+        os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+
+
+_migrate_deprecated_hf_transfer_env()
+
 # Suppress the pkg_resources deprecation warning from perth module
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
 

@@ -35,6 +35,7 @@ from localtalk.services.tools.settings import (
     make_set_show_reasoning_tool,
     make_set_stats_tool,
     make_set_stt_model_tool,
+    make_set_tts_backend_tool,
     make_set_tts_model_tool,
     make_set_tts_tool,
     make_set_vad_mode_tool,
@@ -50,11 +51,12 @@ SpokenSentenceSink = Callable[[str], None]
 _SETTINGS_PROMPT_ADDENDUM = (
     "\n\nYou can change session settings mid-conversation with tools (same knobs as "
     "startup flags): set_reasoning_level, set_web_tools, set_show_reasoning, set_stats, "
-    "set_tts, set_tts_model, set_stt_model, set_vad_mode, set_browser_engine, "
+    "set_tts, set_tts_model, set_tts_backend, set_stt_model, set_vad_mode, set_browser_engine, "
     "set_browser_headed, set_generation. "
     "Use them when the user asks to change how you think, speak, listen, browse, or sample. "
     "For advanced testing without restart: set_stt_model switches Whisper size; "
-    "set_tts_model loads a different mlx-audio TTS model id (slow first load)."
+    "set_tts_model loads a different ChatterBox TTS model id; set_tts_backend switches among ChatterBox, "
+    "Qwen Chinese, and macOS Tingting voices."
 )
 
 _TOOL_AUTONOMY_PROMPT_ADDENDUM = (
@@ -235,6 +237,8 @@ class MLXLanguageModelService:
             registry.register(make_set_tts_tool(set_tts))
         if (set_tts_model := self.session_control.get("set_tts_model")) is not None:
             registry.register(make_set_tts_model_tool(set_tts_model))
+        if (set_tts_backend := self.session_control.get("set_tts_backend")) is not None:
+            registry.register(make_set_tts_backend_tool(set_tts_backend))
         if (set_stt_model := self.session_control.get("set_stt_model")) is not None:
             registry.register(make_set_stt_model_tool(set_stt_model))
         if (set_vad := self.session_control.get("set_vad_mode")) is not None:

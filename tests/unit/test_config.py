@@ -145,6 +145,7 @@ class TestAppConfig:
         assert isinstance(cfg.mlx_lm, MLXLMConfig)
         assert isinstance(cfg.chatterbox, ChatterBoxConfig)
         assert isinstance(cfg.audio, AudioConfig)
+        assert cfg.qwen_tts.model_id == "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit"
         assert isinstance(cfg.web_tools, WebToolsConfig)
         assert isinstance(cfg.browser_tools, BrowserToolsConfig)
         assert cfg.browser_tools.enabled is False
@@ -153,6 +154,7 @@ class TestAppConfig:
         assert cfg.web_tools.startup_probe is True
         assert cfg.session_id == "voice_assistant_session"
         assert cfg.tts_backend == "chatterbox"
+        assert cfg.response_language == "English"
         assert cfg.show_stats is False
         assert "helpful and friendly" in cfg.system_prompt
 
@@ -163,6 +165,7 @@ class TestAppConfig:
         assert cfg1.whisper is not cfg2.whisper
         assert cfg1.mlx_lm is not cfg2.mlx_lm
         assert cfg1.chatterbox is not cfg2.chatterbox
+        assert cfg1.qwen_tts is not cfg2.qwen_tts
         assert cfg1.audio is not cfg2.audio
 
     def test_override_nested_config(self):

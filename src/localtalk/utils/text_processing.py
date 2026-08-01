@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 # Sentence boundary: punctuation followed by whitespace or end-of-string.
-_SENTENCE_END = re.compile(r"[.!?]+(?:\s+|$)")
+_SENTENCE_END = re.compile(r"[.!?。！？]+(?:\s+|$)")
 
 
 def clean_text_for_tts(text: str) -> str:
@@ -32,7 +32,7 @@ def get_first_sentence(text: str) -> tuple[str, str]:
     if not text:
         return "", ""
 
-    match = re.search(r"(.+?[.!?])\s*(.*)", text, re.DOTALL)
+    match = re.search(r"(.+?[.!?。！？])\s*(.*)", text, re.DOTALL)
     if not match:
         return text, ""
 
@@ -41,7 +41,7 @@ def get_first_sentence(text: str) -> tuple[str, str]:
 
     # Too short alone — fold in the next sentence when available.
     if len(first_sentence) < 10 and remaining:
-        next_match = re.search(r"(.+?[.!?])\s*(.*)", remaining, re.DOTALL)
+        next_match = re.search(r"(.+?[.!?。！？])\s*(.*)", remaining, re.DOTALL)
         if next_match:
             first_sentence = f"{first_sentence} {next_match.group(1).strip()}"
             remaining = next_match.group(2).strip()
@@ -98,7 +98,7 @@ def chunk_text_for_streaming(text: str, max_chunk_size: int = 40) -> list[str]:
     if not text:
         return []
 
-    sentences = re.split(r"(?<=[.!?])\s+", text)
+    sentences = re.split(r"(?<=[.!?。！？])\s+", text)
     chunks: list[str] = []
     current_chunk = ""
 

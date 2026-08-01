@@ -52,6 +52,26 @@ class ChatterBoxConfig(BaseModel):
     silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
 
 
+class QwenTTSConfig(BaseModel):
+    """Configuration for Qwen3-TTS Chinese speech synthesis."""
+
+    model_id: str = Field(
+        default="mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
+        description="MLX Qwen3-TTS model ID",
+    )
+    language: str = Field(default="Chinese", description="Qwen3-TTS output language")
+    speaker: str = Field(default="Vivian", description="Built-in Qwen3-TTS speaker")
+    silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
+
+
+class MacOSSayConfig(BaseModel):
+    """Configuration for the native macOS ``say`` speech synthesizer."""
+
+    voice: str = Field(default="Tingting", description="Installed macOS say voice to use")
+    rate: int | None = Field(default=None, ge=1, description="Optional macOS say words-per-minute rate")
+    silence_between_pieces_ms: int = Field(default=250, ge=0, description="Silence between TTS pieces in milliseconds")
+
+
 class WebToolsConfig(BaseModel):
     """Online tools (web_search + browser). Effective state is ``enabled``.
 
@@ -168,6 +188,8 @@ class AppConfig(BaseModel):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     mlx_lm: MLXLMConfig = Field(default_factory=MLXLMConfig)
     chatterbox: ChatterBoxConfig = Field(default_factory=ChatterBoxConfig)
+    qwen_tts: QwenTTSConfig = Field(default_factory=QwenTTSConfig)
+    macos_say: MacOSSayConfig = Field(default_factory=MacOSSayConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     web_tools: WebToolsConfig = Field(default_factory=WebToolsConfig)
     browser_tools: BrowserToolsConfig = Field(default_factory=BrowserToolsConfig)
@@ -181,5 +203,12 @@ class AppConfig(BaseModel):
         default="mlx",
         description="LLM backend: mlx (GPT OSS), auto (Apple FM when available), or apple",
     )
-    tts_backend: Literal["chatterbox", "none"] = Field(default="chatterbox", description="TTS backend to use")
+    tts_backend: Literal["chatterbox", "qwen_chinese", "macos_say", "none"] = Field(
+        default="chatterbox",
+        description="TTS backend to use",
+    )
+    response_language: Literal["English", "Simplified Chinese"] = Field(
+        default="English",
+        description="Language LocalTalk must use for assistant replies during this session",
+    )
     show_stats: bool = Field(default=False, description="Show timing statistics for STT, LLM, and TTS steps")

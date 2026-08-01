@@ -130,6 +130,7 @@ WHISPER_MODEL_SIZES = (
 
 SetSttModel = Callable[..., dict]
 SetTtsModel = Callable[..., dict]
+SetTtsBackend = Callable[[str], dict]
 
 
 def make_set_stt_model_tool(set_stt: SetSttModel) -> ToolSpec:
@@ -191,7 +192,7 @@ def make_set_tts_model_tool(set_tts_model: SetTtsModel) -> ToolSpec:
             "set_tts_model",
             (
                 "Hot-swap the text-to-speech model without restarting LocalTalk. "
-                "Pass a Hugging Face / mlx-audio model id, for example "
+                "Pass a ChatterBox Hugging Face / mlx-audio model id, for example "
                 "mlx-community/chatterbox-turbo-4bit. "
                 "Loads the new model into memory (may take a while) and enables TTS if it was off. "
                 "Use for advanced voice testing. Prefer set_tts only to mute/unmute without reloading."
@@ -213,6 +214,46 @@ def make_set_tts_model_tool(set_tts_model: SetTtsModel) -> ToolSpec:
             "Okay, I'm using the new text-to-speech model now."
             if r.get("ok")
             else f"Sorry, I couldn't change the speech synthesis model. {r.get('error') or ''}".strip()
+        ),
+    )
+
+
+def make_set_tts_backend_tool(set_tts_backend: SetTtsBackend) -> ToolSpec:
+    def handler(args: dict) -> dict:
+        backend = str(args.get("backend", "")).strip()
+        if backend not in {"chatterbox_turbo", "qwen_chinese", "macos_tingting"}:
+            return {"ok": False, "error": "backend must be chatterbox_turbo, qwen_chinese, or macos_tingting"}
+        return set_tts_backend(backend)
+
+    return ToolSpec(
+        name="set_tts_backend",
+        description=build_tool_description(
+            "set_tts_backend",
+            (
+                "Switch spoken replies between the fast English ChatterBox Turbo voice, the Chinese "
+                "Qwen3-TTS voice, and the native macOS Tingting Chinese voice without restarting. "
+                "Use macos_tingting when the user asks to speak Chinese or specifically asks for Tingting; "
+                "it needs no model download. Use qwen_chinese for the higher-quality local MLX option."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "backend": {
+                        "type": "string",
+                        "enum": ["chatterbox_turbo", "qwen_chinese", "macos_tingting"],
+                        "description": "The speech-synthesis backend to load",
+                    },
+                },
+                "required": ["backend"],
+                "additionalProperties": False,
+            },
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: (
+            "Okay, I switched to the macOS Tingting voice." if r.get("ok") and r.get("backend") == "macos_tingting"
+            else "Okay, I switched to the Chinese Qwen voice." if r.get("ok") and r.get("backend") == "qwen_chinese"
+            else "Okay, I switched to the fast English voice." if r.get("ok")
+            else f"Sorry, I couldn't switch the speech voice. {r.get('error') or ''}".strip()
         ),
     )
 

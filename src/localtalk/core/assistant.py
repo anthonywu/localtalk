@@ -176,6 +176,7 @@ class VoiceAssistant:
 
     def __init__(self, config: AppConfig | None = None):
         self.config = config or AppConfig()
+        self._base_system_prompt = self.config.system_prompt
         self.console = Console()
         self.network_status = None
         self.connectivity_cache = ConnectivityCache(
@@ -184,6 +185,7 @@ class VoiceAssistant:
             reachability_url=self.config.web_tools.reachability_url,
         )
         self._tts_cached = None  # keeps TTS instance when mid-session text-only
+        self._tts_cached_backend = self.config.tts_backend if self.config.tts_backend != "none" else "chatterbox"
         self.metrics = MetricsStore()
         self._playback_stop = threading.Event()
 
@@ -345,12 +347,15 @@ class VoiceAssistant:
             # Text-to-speech setup based on backend
             self.tts = None
 
-            if self.config.tts_backend == "chatterbox":
+            if self.config.tts_backend in {"chatterbox", "qwen_chinese", "macos_say"}:
                 try:
-                    from localtalk.services.mlx_tts import MLXTextToSpeechService
-
-                    self.tts = MLXTextToSpeechService(self.config.chatterbox, quiet_console)
-                    init_messages.append("🗣️ ChatterBox TTS enabled (MLX)")
+                    self.tts = self._load_tts_service(quiet_console)
+                    labels = {
+                        "chatterbox": "ChatterBox TTS (MLX)",
+                        "qwen_chinese": "Qwen3-TTS Chinese (MLX)",
+                        "macos_say": f"macOS say ({self.config.macos_say.voice})",
+                    }
+                    init_messages.append(f"🗣️ {labels[self.config.tts_backend]} enabled")
                     live.update(create_panel())
                 except ImportError as e:
                     self.console.print(f"[red]❌ ChatterBox TTS import failed: {e}")
@@ -443,6 +448,7 @@ class VoiceAssistant:
                     "set_stats": self._tool_set_stats,
                     "set_tts": self._tool_set_tts,
                     "set_tts_model": self._tool_set_tts_model,
+                    "set_tts_backend": self._tool_set_tts_backend,
                     "set_stt_model": self._tool_set_stt_model,
                     "set_vad_mode": self._tool_set_vad_mode,
                 }
@@ -459,32 +465,87 @@ class VoiceAssistant:
         self.console.print(f"[cyan]Timing stats set to: {self.config.show_stats}[/cyan]")
         return {"ok": True, "show_stats": self.config.show_stats}
 
+    def _load_tts_service(self, console: Console):
+        """Construct the configured TTS service without changing session state."""
+        if self.config.tts_backend == "qwen_chinese":
+            from localtalk.services.qwen_tts import QwenTextToSpeechService
+
+            return QwenTextToSpeechService(self.config.qwen_tts, console)
+        if self.config.tts_backend == "macos_say":
+            from localtalk.services.macos_say_tts import MacOSSayTextToSpeechService
+
+            return MacOSSayTextToSpeechService(self.config.macos_say, console)
+        if self.config.tts_backend == "chatterbox":
+            from localtalk.services.mlx_tts import MLXTextToSpeechService
+
+            return MLXTextToSpeechService(self.config.chatterbox, console)
+        raise RuntimeError("cannot load TTS while text-only mode is active")
+
+    def _active_tts_model_id(self) -> str:
+        if self.config.tts_backend == "qwen_chinese":
+            return self.config.qwen_tts.model_id
+        if self.config.tts_backend == "macos_say":
+            return f"macOS say: {self.config.macos_say.voice}"
+        return self.config.chatterbox.model_id
+
+    def _tts_silence_between_pieces_ms(self) -> int:
+        if self.config.tts_backend == "qwen_chinese":
+            return self.config.qwen_tts.silence_between_pieces_ms
+        if self.config.tts_backend == "macos_say":
+            return self.config.macos_say.silence_between_pieces_ms
+        return self.config.chatterbox.silence_between_pieces_ms
+
+    def _set_session_language(self, language: str) -> None:
+        """Update the active LLM instruction after an input/output language switch."""
+        directive = (
+            "\n\nFor this session, respond only in Simplified Chinese. Preserve Chinese user input; "
+            "do not translate it into English unless the user explicitly requests a translation."
+            if language == "Simplified Chinese"
+            else "\n\nFor this session, respond only in English unless the user explicitly requests another language."
+        )
+        base_prompt = getattr(self, "_base_system_prompt", self.config.system_prompt)
+        self._base_system_prompt = base_prompt
+        self.config.response_language = language  # type: ignore[assignment]
+        self.config.system_prompt = base_prompt + directive
+        if not getattr(self, "llm", None):
+            return
+        self.llm.system_prompt = self.config.system_prompt
+        # Apple Foundation Models keeps the instructions in a persistent helper
+        # session; refresh them when the language changes between turns.
+        if getattr(self, "llm_provider", None) == "apple" and hasattr(self.llm, "_reset_session"):
+            try:
+                self.llm._reset_session()
+            except Exception as exc:
+                self.console.print(f"[yellow]Warning: could not refresh language instructions: {exc}[/yellow]")
+
     def _tool_set_tts(self, enabled: bool) -> dict:
         if enabled:
             if self.tts is None:
                 if self._tts_cached is not None:
                     self.tts = self._tts_cached
+                    self.config.tts_backend = self._tts_cached_backend
                 else:
                     try:
-                        from localtalk.services.mlx_tts import MLXTextToSpeechService
-
-                        self.tts = MLXTextToSpeechService(self.config.chatterbox, self.console)
+                        self.config.tts_backend = self._tts_cached_backend
+                        self.tts = self._load_tts_service(self.console)
                     except Exception as exc:
                         return {"ok": False, "error": f"could not enable TTS: {exc}"}
-            self.config.tts_backend = "chatterbox"
             self.console.print("[cyan]TTS set to: on[/cyan]")
             return {
                 "ok": True,
                 "tts_enabled": True,
-                "model_id": self.config.chatterbox.model_id,
+                "model_id": self._active_tts_model_id(),
+                "backend": self.config.tts_backend,
             }
         # Disable without unloading so re-enable is fast
+        model_id = self._active_tts_model_id()
+        self._tts_cached_backend = self.config.tts_backend
         self.config.tts_backend = "none"
         if self.tts is not None:
             self._tts_cached = self.tts
             self.tts = None
         self.console.print("[cyan]TTS set to: off (text-only)[/cyan]")
-        return {"ok": True, "tts_enabled": False, "model_id": self.config.chatterbox.model_id}
+        return {"ok": True, "tts_enabled": False, "model_id": model_id}
 
     def _tool_set_tts_model(self, model_id: str) -> dict:
         """Hot-swap ChatterBox / mlx-audio TTS model mid-session."""
@@ -525,6 +586,61 @@ class VoiceAssistant:
         return {
             "ok": True,
             "model_id": model_id,
+            "reloaded": True,
+            "tts_enabled": True,
+        }
+
+    def _tool_set_tts_backend(self, backend: str) -> dict:
+        """Hot-swap matching speech input and output language backends."""
+        target = {
+            "qwen_chinese": "qwen_chinese",
+            "macos_tingting": "macos_say",
+        }.get(backend, "chatterbox")
+        is_chinese = target in {"qwen_chinese", "macos_say"}
+        stt_language = "zh" if is_chinese else "en"
+        if target == self.config.tts_backend and self.tts is not None:
+            self.config.whisper.language = stt_language
+            self._set_session_language("Simplified Chinese" if is_chinese else "English")
+            return {
+                "ok": True,
+                "backend": backend,
+                "model_id": self._active_tts_model_id(),
+                "reloaded": False,
+                "tts_enabled": True,
+                "note": "already using this TTS backend",
+            }
+
+        previous_backend = self.config.tts_backend
+        self.config.tts_backend = target
+        model_id = self._active_tts_model_id()
+        self.console.print(f"[cyan]Loading TTS backend: {backend} ({model_id}); this may take a while...[/cyan]")
+        try:
+            new_tts = self._load_tts_service(self.console)
+        except Exception as exc:
+            self.config.tts_backend = previous_backend
+            return {"ok": False, "error": f"could not load TTS backend {backend!r}: {exc}"}
+
+        old_tts = self.tts
+        self.tts = new_tts
+        self._tts_cached = None
+        self._tts_cached_backend = target
+        # Whisper is configured per session rather than per call. Pairing the
+        # input language with the output voice prevents Chinese speech from
+        # being forced through the prior English decoder setting.
+        self.config.whisper.language = stt_language
+        self._set_session_language("Simplified Chinese" if is_chinese else "English")
+        if old_tts is not None:
+            del old_tts
+            import gc
+
+            gc.collect()
+        self.console.print(f"[green]TTS backend set to: {backend}[/green]")
+        return {
+            "ok": True,
+            "backend": backend,
+            "model_id": model_id,
+            "language": "Simplified Chinese" if is_chinese else "English",
+            "stt_language": stt_language,
             "reloaded": True,
             "tts_enabled": True,
         }
@@ -788,7 +904,7 @@ class VoiceAssistant:
                 sample_rate,
                 interrupt_check=self._playback_stop.is_set,
                 show_waveform=False,
-                trail_silence_ms=float(self.config.chatterbox.silence_between_pieces_ms),
+                trail_silence_ms=float(self._tts_silence_between_pieces_ms()),
             )
             metrics["play_ms"] = float(metrics.get("play_ms") or 0.0) + (time.perf_counter() - play_start) * 1000.0
             if not finished:
@@ -946,7 +1062,49 @@ class VoiceAssistant:
     def _process_text_response(self, user_input: str) -> None:
         """Generate and play response for text input."""
         print_user_utterance(self.console, user_input)
+        if self._handle_direct_tts_backend_command(user_input):
+            return
         self._respond(user_input, input_mode="text")
+
+    def _handle_direct_tts_backend_command(self, text: str) -> bool:
+        """Handle unambiguous voice-mode switches without relying on the LLM.
+
+        The model can normally call ``set_tts_backend`` itself, but commands such
+        as "let's switch to Chinese" must change the synthesizer before it tries
+        to speak a reply in that language.
+        """
+        normalized = " ".join(text.casefold().replace("'", "").split())
+        wants_tingting = "tingting" in normalized or "ting ting" in normalized or "婷婷" in text
+        wants_qwen = "qwen" in normalized
+        wants_chinese = "chinese" in normalized or "mandarin" in normalized or "中文" in text or "普通话" in text
+        wants_switch = any(word in normalized for word in ("switch", "change", "use")) or "切换" in text or "使用" in text
+        wants_english = "english" in normalized or "英语" in text
+        if not wants_switch or not (wants_tingting or wants_qwen or wants_chinese or wants_english):
+            return False
+
+        backend = (
+            "qwen_chinese"
+            if wants_qwen
+            else "macos_tingting"
+            if wants_tingting or wants_chinese
+            else "chatterbox_turbo"
+        )
+        result = self._tool_set_tts_backend(backend)
+        if result.get("ok"):
+            confirmation = (
+                "已切换到 Qwen 中文语音。"
+                if backend == "qwen_chinese"
+                else "已切换到 Tingting 系统语音。"
+                if backend == "macos_tingting"
+                else "Switched to the fast English voice."
+            )
+            print_assistant_utterance(self.console, confirmation)
+        else:
+            print_assistant_utterance(
+                self.console,
+                f"I couldn't switch the speech voice. {result.get('error') or ''}".strip(),
+            )
+        return True
 
     def _process_voice_response(self, audio_data) -> None:
         """Process recorded audio: transcribe, generate response, and play TTS."""
@@ -989,6 +1147,8 @@ class VoiceAssistant:
             return
 
         print_user_utterance(self.console, text)
+        if self._handle_direct_tts_backend_command(text):
+            return
         self._respond(text, stt_time, input_mode="voice")
 
     def process_voice_input(self) -> bool:
