@@ -1,13 +1,28 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-07-31
+
+### Added
+
+- **Sentence-streamed speech**: final-channel text is spoken sentence-by-sentence as the LLM produces it (time-to-first-audio tracks first sentence + first TTS chunk, not the full reply)
+- **Turn metrics** written to `~/.cache/localtalk/metrics/turns.jsonl` (honors `XDG_CACHE_HOME`): STT/LLM/TTS timings, time-to-first-audio, chunk counts, interrupt flag
+- **Earcons**: short listen / heard / speak / error tones for eyes-free feedback
+- **Esc stops playback** mid-reply (remaining sentence chunks are skipped)
+- Streaming text helpers under `utils/text_processing.py` (`take_complete_sentences`, `chunk_text_for_streaming`)
+- **Experimental Apple Foundation Models provider** (`--llm-provider auto|apple|mlx`): on macOS 27+ (Golden Gate) when `SystemLanguageModel` is available, `auto` defaults to the on-device Apple model via a small Swift helper (`localtalk-fm`); tools use a JSON `tool_call` host protocol. Force MLX with `--llm-provider mlx` or `LOCALTALK_LLM_PROVIDER=mlx`
+- Mid-session **`set_stt_model`** / **`set_tts_model`** tools: hot-swap Whisper size (and optional language) or mlx-audio TTS model id without restarting — for advanced A/B testing
+- Optional `--save-audio` output: save generated TTS responses as 32-bit WAV files in `audio_outputs/`
 
 ### Changed
 
 - Online tools default to **auto**: enabled when startup detects internet reachability, off when offline (override with `--enable-web` / `--no-web`)
 - Mid-session `set_web_tools` Harmony tool lets the user say "enable web" / "disable web" without restarting
-- Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (model/whisper still require restart)
+- Every runtime startup knob has a mid-session tool: `set_reasoning_level`, `set_web_tools`, `set_show_reasoning`, `set_stats`, `set_tts`, `set_tts_model`, `set_stt_model`, `set_vad_mode`, `set_browser_engine`, `set_browser_headed`, `set_generation` (LLM base model still requires restart; Whisper/TTS model ids can hot-swap)
 - Browser control defaults to **CDP attach** to the user's running Chrome (`http://127.0.0.1:9222`); falls back to launching Chrome if CDP is down. Use `--no-browser-attach` to force launch-only. Disconnect never quits the user's Chrome.
+- Disable tqdm / HF progress bars by default at process entry so they cannot stomp Rich Live regions
+- Generated audio is no longer saved by default; use `--save-audio` when you want WAV files.
+- Clear requests that map to an available tool run directly without an approval prompt; the assistant asks only for missing required details or inherently consequential actions.
+- Experimental Apple Foundation Models tool calls accept common malformed JSON shapes and keep follow-up tool results within the model context budget.
 
 ## [0.6.0] - 2026-07-30
 

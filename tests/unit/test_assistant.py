@@ -97,6 +97,7 @@ def _make_assistant_stub(config=None):
     """Create a VoiceAssistant via __new__ with no service init."""
     from localtalk.core.assistant import VoiceAssistant
     from localtalk.services.tools.online import ConnectivityCache
+    from localtalk.utils.metrics import MetricsStore
 
     assistant = VoiceAssistant.__new__(VoiceAssistant)
     assistant.config = config or AppConfig()
@@ -107,7 +108,21 @@ def _make_assistant_stub(config=None):
         probe_timeout_s=assistant.config.web_tools.probe_timeout_s,
         reachability_url=assistant.config.web_tools.reachability_url,
     )
+    assistant.metrics = MetricsStore()
+    assistant._playback_stop = __import__("threading").Event()
+    assistant._tts_cached = None
     return assistant
+
+
+def _llm_returns(text: str):
+    """Side-effect for llm.generate_response that also drives the speech sink."""
+
+    def _side_effect(user_text, session_id=None, on_spoken_sentence=None, **kwargs):
+        if on_spoken_sentence is not None:
+            on_spoken_sentence(text)
+        return text
+
+    return _side_effect
 
 
 class TestEnhanceSystemPrompt:
@@ -136,6 +151,81 @@ class TestEnhanceSystemPrompt:
         assert assistant.config.system_prompt == original
 
 
+# ────────────────────────── mid-session STT/TTS model swap ──────────────────
+
+
+class TestSttTtsModelHotSwap:
+    def test_set_stt_model_reloads(self):
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.config.whisper.model_size = "turbo"
+        new_stt = MagicMock()
+        with patch(
+            "localtalk.services.speech_recognition.SpeechRecognitionService",
+            return_value=new_stt,
+        ) as ctor:
+            result = assistant._tool_set_stt_model("tiny", language="en")
+        assert result["ok"] is True
+        assert result["model"] == "tiny"
+        assert result["reloaded"] is True
+        assert assistant.stt is new_stt
+        assert assistant.config.whisper.model_size == "tiny"
+        ctor.assert_called_once()
+
+    def test_set_stt_model_noop_when_same(self):
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.config.whisper.model_size = "turbo"
+        assistant.config.whisper.language = "en"
+        result = assistant._tool_set_stt_model("turbo")
+        assert result["ok"] is True
+        assert result["reloaded"] is False
+
+    def test_set_stt_model_rejects_unknown(self):
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        result = assistant._tool_set_stt_model("not-a-model")
+        assert result["ok"] is False
+
+    def test_set_tts_model_reloads(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant._tts_cached = MagicMock()
+        assistant.config.chatterbox.model_id = "old-model"
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is True
+        assert assistant.tts is new_tts
+        assert assistant._tts_cached is None
+        assert assistant.config.chatterbox.model_id == "mlx-community/chatterbox-turbo-4bit"
+        ctor.assert_called_once()
+
+    def test_set_tts_model_noop_when_same_and_loaded(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.chatterbox.model_id = "mlx-community/chatterbox-turbo-4bit"
+        result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is False
+
+    def test_set_tts_model_rolls_back_config_on_failure(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.chatterbox.model_id = "old-model"
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            side_effect=RuntimeError("load failed"),
+        ):
+            result = assistant._tool_set_tts_model("bad-model")
+        assert result["ok"] is False
+        assert assistant.config.chatterbox.model_id == "old-model"
+
+
 # ────────────────────────── _init_services ──────────────────────────
 
 
@@ -145,11 +235,13 @@ class TestInitServices:
         output (response text read-ahead, retry warnings, reasoning updates,
         recording status) must render to the interactive console."""
         assistant = _make_assistant_stub()
+        assistant.config.llm_provider = "mlx"
         llm_instance = MagicMock()
         audio_instance = MagicMock()
         monkeypatch.setattr("localtalk.core.assistant.SpeechRecognitionService", MagicMock())
+        monkeypatch.setattr("localtalk.core.assistant.resolve_llm_provider", lambda _p: "mlx")
         monkeypatch.setattr(
-            "localtalk.core.assistant.MLXLanguageModelService",
+            "localtalk.services.mlx_llm.MLXLanguageModelService",
             MagicMock(return_value=llm_instance),
         )
         monkeypatch.setattr("localtalk.services.mlx_tts.MLXTextToSpeechService", MagicMock())
@@ -159,6 +251,7 @@ class TestInitServices:
 
         assert llm_instance.console is assistant.console
         assert audio_instance.console is assistant.console
+        assert assistant.llm_provider == "mlx"
 
 
 # ────────────────────────── _process_text_response ──────────────────────────
@@ -173,36 +266,67 @@ class TestProcessTextResponse:
         assistant.audio = MagicMock()
         return assistant
 
-    def test_with_tts_calls_llm_and_tts(self):
+    def test_with_tts_calls_llm_and_tts(self, tmp_path):
         tts = MagicMock()
-        tts.synthesize_long_form.return_value = (24000, np.array([0.1, 0.2], dtype=np.float32))
+        tts.synthesize.return_value = (24000, np.array([0.1, 0.2], dtype=np.float32))
         assistant = self._make_assistant_with_mocks(tts=tts)
-        assistant.llm.generate_response.return_value = "**Hello** world"
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
+        assistant.llm.generate_response.side_effect = _llm_returns("**Hello** world")
+        assistant.audio.play_audio.return_value = True
 
         assistant._process_text_response("hi")
 
         assert assistant.llm.generate_response.called
-        assert tts.synthesize_long_form.called
+        assert tts.synthesize.called
         # Markdown should be stripped before TTS
-        tts_text = tts.synthesize_long_form.call_args[0][0]
+        tts_text = tts.synthesize.call_args[0][0]
         assert "**" not in tts_text
         assert assistant.audio.play_audio.called
+        assert not assistant.audio.save_audio_file.called
+        # Streaming path pads with chatterbox.silence_between_pieces_ms
+        assert assistant.audio.play_audio.call_args.kwargs.get("trail_silence_ms") == float(
+            assistant.config.chatterbox.silence_between_pieces_ms
+        )
 
-    def test_without_tts_only_calls_llm(self):
+    def test_with_save_audio_writes_each_tts_chunk(self, tmp_path):
+        tts = MagicMock()
+        tts.synthesize.return_value = (24000, np.array([0.1, 0.2], dtype=np.float32))
+        assistant = self._make_assistant_with_mocks(tts=tts)
+        assistant.config.audio.save_generated_audio = True
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
+        assistant.llm.generate_response.side_effect = _llm_returns("Hello")
+        assistant.audio.play_audio.return_value = True
+
+        assistant._process_text_response("hi")
+
+        assistant.audio.save_audio_file.assert_called_once()
+
+    def test_without_tts_only_calls_llm(self, tmp_path):
         assistant = self._make_assistant_with_mocks(tts=None)
-        assistant.llm.generate_response.return_value = "Hello"
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
+        assistant.llm.generate_response.side_effect = _llm_returns("Hello")
 
         assistant._process_text_response("hi")
 
         assert assistant.llm.generate_response.called
         assert not assistant.audio.play_audio.called
 
-    def test_stats_mode(self):
+    def test_stats_mode(self, tmp_path):
         tts = MagicMock()
-        tts.synthesize_long_form.return_value = (24000, np.array([0.1], dtype=np.float32))
+        tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
         assistant = self._make_assistant_with_mocks(tts=tts)
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
         assistant.config.show_stats = True
-        assistant.llm.generate_response.return_value = "Hello"
+        assistant.llm.generate_response.side_effect = _llm_returns("Hello")
+        assistant.audio.play_audio.return_value = True
 
         # Should not raise
         assistant._process_text_response("hi")
@@ -220,19 +344,23 @@ class TestProcessVoiceResponse:
         assistant.audio = MagicMock()
         return assistant
 
-    def test_with_tts_transcribes_and_synthesizes(self):
+    def test_with_tts_transcribes_and_synthesizes(self, tmp_path):
         tts = MagicMock()
-        tts.synthesize_long_form.return_value = (24000, np.array([0.1], dtype=np.float32))
+        tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
         assistant = self._make_assistant_with_mocks(tts=tts)
+        assistant.metrics = __import__("localtalk.utils.metrics", fromlist=["MetricsStore"]).MetricsStore(
+            metrics_dir=tmp_path
+        )
         assistant.stt.transcribe.return_value = "hello there"
-        assistant.llm.generate_response.return_value = "Hi!"
+        assistant.llm.generate_response.side_effect = _llm_returns("Hi!")
+        assistant.audio.play_audio.return_value = True
 
         audio = np.array([0.1, 0.2, 0.3], dtype=np.float32)
         assistant._process_voice_response(audio)
 
         assert assistant.stt.transcribe.called
         assert assistant.llm.generate_response.called
-        assert tts.synthesize_long_form.called
+        assert tts.synthesize.called
         assert assistant.audio.play_audio.called
 
     def test_empty_transcription_skips_llm(self):
@@ -244,7 +372,7 @@ class TestProcessVoiceResponse:
         assistant._process_voice_response(audio)
 
         assert not assistant.llm.generate_response.called
-        assert not tts.synthesize_long_form.called
+        assert not tts.synthesize.called
 
     def test_whitespace_transcription_skips_llm(self):
         tts = MagicMock()
@@ -344,8 +472,9 @@ class TestProcessVoiceInput:
         assistant.llm = MagicMock()
         assistant.tts = MagicMock()
         assistant.audio = MagicMock()
-        assistant.tts.synthesize_long_form.return_value = (24000, np.array([0.1], dtype=np.float32))
-        assistant.llm.generate_response.return_value = "Hello"
+        assistant.tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
+        assistant.llm.generate_response.side_effect = _llm_returns("Hello")
+        assistant.audio.play_audio.return_value = True
         return assistant
 
     def test_keyboard_interrupt_returns_false(self):

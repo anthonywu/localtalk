@@ -5,6 +5,8 @@ import sys
 import threading
 import time
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -23,6 +25,48 @@ from localtalk.utils.waveform import (
     level_to_block,
     render_waveform,
 )
+
+# Default edge fade for speech playback. Streaming sentence TTS restarts
+# PortAudio per chunk; non-zero endpoints click without this.
+DEFAULT_PLAYBACK_FADE_MS = 10.0
+
+
+def apply_edge_fades(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    fade_ms: float = DEFAULT_PLAYBACK_FADE_MS,
+) -> np.ndarray:
+    """Apply short cosine fade-in/out so stream restarts don't pop.
+
+    Fade length is clamped to at most half the signal so short clips still
+    ramp cleanly to/from zero.
+    """
+    if audio.size == 0 or sample_rate <= 0 or fade_ms <= 0:
+        return audio
+    out = np.asarray(audio, dtype=np.float32).reshape(-1).copy()
+    n_fade = min(len(out) // 2, max(1, int(round(sample_rate * fade_ms / 1000.0))))
+    if n_fade < 1:
+        return out
+    # Hann half-window: smooth 0→1 / 1→0 without a hard slope discontinuity.
+    ramp = np.sin(np.linspace(0.0, np.pi / 2.0, n_fade, dtype=np.float32)) ** 2
+    out[:n_fade] *= ramp
+    out[-n_fade:] *= ramp[::-1]
+    return out
+
+
+def pad_trailing_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    silence_ms: float,
+) -> np.ndarray:
+    """Append zeros so consecutive ``sd.play`` calls have a soft gap."""
+    if audio.size == 0 or sample_rate <= 0 or silence_ms <= 0:
+        return audio
+    n = int(round(sample_rate * silence_ms / 1000.0))
+    if n <= 0:
+        return np.asarray(audio, dtype=np.float32).reshape(-1)
+    return np.concatenate([np.asarray(audio, dtype=np.float32).reshape(-1), np.zeros(n, dtype=np.float32)])
 
 
 class AudioService:
@@ -265,12 +309,102 @@ class AudioService:
 
         return audio_np
 
-    def play_audio(self, audio_array: np.ndarray, sample_rate: int | None = None):
+    def stop_playback(self) -> None:
+        """Stop any in-progress sounddevice playback."""
+        try:
+            self.sd.stop()
+        except Exception:
+            pass
+
+    def play_earcon(self, kind: str) -> None:
+        """Play a short, quiet status tone (no waveform UI).
+
+        Kinds: ``listen`` (open), ``heard`` (speech captured), ``speak`` (reply
+        starting), ``error`` (failure).
+        """
+        sample_rate = 16000
+        tones: dict[str, list[tuple[float, float, float]]] = {
+            # (freq_hz, duration_s, gain)
+            "listen": [(880.0, 0.045, 0.08), (1175.0, 0.055, 0.07)],
+            "heard": [(1320.0, 0.035, 0.06)],
+            "speak": [(660.0, 0.04, 0.05), (880.0, 0.05, 0.05)],
+            "error": [(220.0, 0.07, 0.09), (180.0, 0.09, 0.08)],
+        }
+        sequence = tones.get(kind)
+        if not sequence:
+            return
+
+        pieces: list[np.ndarray] = []
+        for freq, dur, gain in sequence:
+            n = max(1, int(sample_rate * dur))
+            t = np.arange(n, dtype=np.float32) / float(sample_rate)
+            # Short cosine fade to avoid clicks
+            fade = min(32, n // 4)
+            env = np.ones(n, dtype=np.float32)
+            if fade > 0:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                env[:fade] = ramp
+                env[-fade:] = ramp[::-1]
+            wave = (np.sin(2.0 * np.pi * freq * t) * gain * env).astype(np.float32)
+            pieces.append(wave)
+            pieces.append(np.zeros(int(sample_rate * 0.015), dtype=np.float32))
+
+        # Extra trailing gap after "speak" so the following 24 kHz TTS stream
+        # restart does not butt against the 16 kHz earcon tail.
+        if kind == "speak":
+            pieces.append(np.zeros(int(sample_rate * 0.04), dtype=np.float32))
+
+        audio = np.concatenate(pieces) if pieces else np.array([], dtype=np.float32)
+        try:
+            self.sd.play(audio, sample_rate)
+            self.sd.wait()
+        except Exception:
+            pass
+
+    def save_audio_file(
+        self,
+        audio_array: np.ndarray,
+        sample_rate: int,
+        *,
+        output_dir: str | Path = "audio_outputs",
+        prefix: str = "response",
+    ) -> Path:
+        """Save generated audio as a labeled 32-bit float WAV file."""
+        import soundfile as sf
+
+        audio = np.asarray(audio_array, dtype=np.float32).reshape(-1)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        channels = 1
+        bits = 32
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        filename = f"{prefix}_{timestamp}_{sample_rate}hz_{channels}ch_{bits}bit.wav"
+        path = output_path / filename
+        sf.write(path, audio, sample_rate, subtype="FLOAT")
+        return path
+
+    def play_audio(
+        self,
+        audio_array: np.ndarray,
+        sample_rate: int | None = None,
+        *,
+        interrupt_check=None,
+        show_waveform: bool = True,
+        fade_ms: float = DEFAULT_PLAYBACK_FADE_MS,
+        trail_silence_ms: float = 0.0,
+    ) -> bool:
         """Play audio array with a live scrolling waveform.
 
         Args:
             audio_array: Audio data as numpy array
             sample_rate: Sample rate (uses config default if not provided)
+            interrupt_check: Optional callable returning True to stop playback early
+            show_waveform: When False, play without the Live waveform panel
+            fade_ms: Cosine edge fade to avoid clicks on stream restarts (0 disables)
+            trail_silence_ms: Zeros appended after the signal (soft gap before next play)
+
+        Returns:
+            True if playback finished, False if interrupted or empty.
 
         """
         sample_rate = sample_rate or self.config.sample_rate
@@ -279,14 +413,28 @@ class AudioService:
         if audio_array.dtype != np.float32:
             audio_array = audio_array.astype(np.float32)
 
+        if audio_array.size == 0:
+            return True
+
         # Ensure audio is in range [-1, 1]
-        if audio_array.size > 0 and np.abs(audio_array).max() > 1.0:
+        if np.abs(audio_array).max() > 1.0:
             audio_array = audio_array / np.abs(audio_array).max()
 
-        blank_line(self.console)
+        # Soften hard PortAudio restarts between streamed TTS sentences.
+        audio_array = apply_edge_fades(audio_array, sample_rate, fade_ms=fade_ms)
+        if trail_silence_ms > 0:
+            audio_array = pad_trailing_silence(audio_array, sample_rate, trail_silence_ms)
+
+        if show_waveform:
+            blank_line(self.console)
 
         try:
-            self._play_with_waveform(audio_array, sample_rate)
+            return self._play_with_waveform(
+                audio_array,
+                sample_rate,
+                interrupt_check=interrupt_check,
+                show_waveform=show_waveform,
+            )
         except self.sd.PortAudioError as e:
             self.console.print(f"[yellow]Audio playback error: {e}")
             self.console.print("[yellow]Attempting fallback playback...")
@@ -295,11 +443,17 @@ class AudioService:
             try:
                 # Reset to default device
                 self.sd.default.reset()
-                self._play_with_waveform(audio_array, sample_rate)
+                return self._play_with_waveform(
+                    audio_array,
+                    sample_rate,
+                    interrupt_check=interrupt_check,
+                    show_waveform=show_waveform,
+                )
             except Exception as e2:
                 # Final fallback: try to find a working output device
                 self.console.print(f"[yellow]Fallback failed: {e2}")
                 self._try_alternative_playback(audio_array, sample_rate)
+                return True
 
     def _play_with_waveform(
         self,
@@ -307,8 +461,13 @@ class AudioService:
         sample_rate: int,
         *,
         device: int | None = None,
-    ) -> None:
-        """Play audio while animating the same Unicode waveform used for input capture."""
+        interrupt_check=None,
+        show_waveform: bool = True,
+    ) -> bool:
+        """Play audio while animating the same Unicode waveform used for input capture.
+
+        Returns False if interrupted via ``interrupt_check``.
+        """
         play_kwargs: dict = {}
         if device is not None:
             play_kwargs["device"] = device
@@ -323,7 +482,7 @@ class AudioService:
             current_level = window[-1][0] if window else 0.0
 
             table = Table(show_header=False, box=None, padding=0)
-            table.add_row("[bold cyan]🔊 Playing audio...[/bold cyan]")
+            table.add_row("[bold cyan]🔊 Playing audio...[/bold cyan] [dim](Esc to stop)[/dim]")
 
             waveform = render_waveform(window)
             waveform_row = Text()
@@ -345,12 +504,28 @@ class AudioService:
         # No samples / zero duration: just wait for the device buffer to drain.
         if not levels or duration <= 0:
             self.sd.wait()
-            return
+            return True
 
         sys.stdout.flush()
         sys.stderr.flush()
 
         start = time.monotonic()
+        interrupted = False
+
+        if not show_waveform:
+            while True:
+                if interrupt_check is not None and interrupt_check():
+                    interrupted = True
+                    self.stop_playback()
+                    break
+                elapsed = time.monotonic() - start
+                if elapsed >= duration:
+                    break
+                time.sleep(0.05)
+            if not interrupted:
+                self.sd.wait()
+            return not interrupted
+
         with Live(
             create_playback_display(1),
             refresh_per_second=15,
@@ -358,6 +533,10 @@ class AudioService:
             transient=True,
         ) as live:
             while True:
+                if interrupt_check is not None and interrupt_check():
+                    interrupted = True
+                    self.stop_playback()
+                    break
                 elapsed = time.monotonic() - start
                 if elapsed >= duration:
                     break
@@ -368,13 +547,16 @@ class AudioService:
                 live.update(create_playback_display(progress_idx))
                 time.sleep(0.05)
 
-            # Final full-window frame
-            live.update(create_playback_display(len(levels)))
+            if not interrupted:
+                # Final full-window frame
+                live.update(create_playback_display(len(levels)))
 
         # Drain any remaining buffer (timing vs device clock can drift slightly)
-        self.sd.wait()
+        if not interrupted:
+            self.sd.wait()
         sys.stdout.flush()
         sys.stderr.flush()
+        return not interrupted
 
     def _try_alternative_playback(self, audio_array: np.ndarray, sample_rate: int):
         """Try alternative playback methods."""

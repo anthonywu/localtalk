@@ -21,6 +21,7 @@ class TestParseArgs:
         with patch("sys.argv", ["localtalk"]):
             args = parse_args()
         assert args.model == "mlx-community/gpt-oss-20b-MXFP4-Q8"
+        assert args.llm_provider == "mlx"
         assert args.whisper_model == "turbo"
         assert args.temperature == 0.7
         assert args.top_p == 1.0
@@ -179,6 +180,12 @@ class TestMain:
         mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
         config = mock_va_class.call_args[0][0]
         assert config.tts_backend == "chatterbox"
+        assert config.audio.save_generated_audio is False
+
+    def test_main_save_audio_enables_generated_audio_files(self):
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--save-audio"])
+        config = mock_va_class.call_args[0][0]
+        assert config.audio.save_generated_audio is True
 
     def test_main_stats_flag(self):
         mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--stats"])

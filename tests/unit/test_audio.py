@@ -103,13 +103,42 @@ class TestRecordAudioConversion:
 # ────────────────────────── play_audio ──────────────────────────
 
 
+class TestEdgeFades:
+    def test_endpoints_near_zero(self):
+        from localtalk.services.audio import apply_edge_fades
+
+        # Constant non-zero would click hard without fades
+        audio = np.ones(2400, dtype=np.float32) * 0.5  # 100 ms @ 24 kHz
+        faded = apply_edge_fades(audio, 24000, fade_ms=10.0)
+        assert faded[0] == pytest.approx(0.0, abs=1e-6)
+        assert faded[-1] == pytest.approx(0.0, abs=1e-6)
+        # Middle of signal remains full amplitude
+        assert faded[len(faded) // 2] == pytest.approx(0.5, abs=1e-5)
+
+    def test_fade_disabled(self):
+        from localtalk.services.audio import apply_edge_fades
+
+        audio = np.ones(100, dtype=np.float32)
+        out = apply_edge_fades(audio, 24000, fade_ms=0.0)
+        np.testing.assert_array_equal(out, audio)
+
+    def test_trailing_silence_pad(self):
+        from localtalk.services.audio import pad_trailing_silence
+
+        audio = np.ones(10, dtype=np.float32)
+        padded = pad_trailing_silence(audio, 1000, silence_ms=50.0)  # 50 samples
+        assert len(padded) == 60
+        assert padded[-1] == 0.0
+        np.testing.assert_array_equal(padded[:10], audio)
+
+
 class TestPlayAudio:
     def test_dtype_conversion(self, fake_sd):
         """Non-float32 arrays are converted before playback."""
         service = _make_audio_service(fake_sd)
 
         audio = np.array([0, 0.5, -0.5, 1.0], dtype=np.float64)
-        service.play_audio(audio, sample_rate=24000)
+        service.play_audio(audio, sample_rate=24000, fade_ms=0.0)
 
         played = fake_sd.play.call_args[0][0]
         assert played.dtype == np.float32
@@ -119,27 +148,45 @@ class TestPlayAudio:
         service = _make_audio_service(fake_sd)
 
         audio = np.array([0.0, 2.0, -2.0, 4.0], dtype=np.float32)
-        service.play_audio(audio, sample_rate=24000)
+        service.play_audio(audio, sample_rate=24000, fade_ms=0.0)
 
         played = fake_sd.play.call_args[0][0]
         assert np.abs(played).max() <= 1.0
 
     def test_in_range_not_normalized(self, fake_sd):
-        """Audio within [-1, 1] is not scaled."""
+        """Audio within [-1, 1] is not scaled (fade disabled for exact compare)."""
         service = _make_audio_service(fake_sd)
 
         audio = np.array([0.0, 0.5, -0.5, 0.9], dtype=np.float32)
-        service.play_audio(audio, sample_rate=24000)
+        service.play_audio(audio, sample_rate=24000, fade_ms=0.0)
 
         played = fake_sd.play.call_args[0][0]
         np.testing.assert_allclose(played, audio)
+
+    def test_default_edge_fade_applied(self, fake_sd):
+        """Default playback softens non-zero endpoints."""
+        service = _make_audio_service(fake_sd)
+        audio = np.ones(2400, dtype=np.float32) * 0.5
+        service.play_audio(audio, sample_rate=24000)
+        played = fake_sd.play.call_args[0][0]
+        assert played[0] == pytest.approx(0.0, abs=1e-6)
+        assert played[-1] == pytest.approx(0.0, abs=1e-6)
+
+    def test_trail_silence_extends_buffer(self, fake_sd):
+        """trail_silence_ms appends zeros after the faded signal."""
+        service = _make_audio_service(fake_sd)
+        audio = np.ones(100, dtype=np.float32) * 0.3
+        service.play_audio(audio, sample_rate=1000, fade_ms=0.0, trail_silence_ms=50.0)
+        played = fake_sd.play.call_args[0][0]
+        assert len(played) == 150
+        assert played[-1] == 0.0
 
     def test_default_sample_rate(self, fake_sd):
         """When no sample_rate given, config default is used."""
         service = _make_audio_service(fake_sd)
 
         audio = np.array([0.0, 0.5], dtype=np.float32)
-        service.play_audio(audio)
+        service.play_audio(audio, fade_ms=0.0)
 
         # sd.play is called positionally: play(audio, sample_rate)
         played_sr = fake_sd.play.call_args[0][1]
@@ -156,17 +203,17 @@ class TestPlayAudio:
         fake_sd.default.reset = MagicMock()
 
         audio = np.array([0.0, 0.5], dtype=np.float32)
-        service.play_audio(audio, sample_rate=24000)
+        service.play_audio(audio, sample_rate=24000, fade_ms=0.0)
 
         # Should have been called at least twice (initial + fallback)
         assert fake_sd.play.call_count >= 2
 
     def test_empty_audio_waits_without_error(self, fake_sd):
-        """Empty array still calls play/wait and does not crash."""
+        """Empty array is a no-op (no device play) and does not crash."""
         service = _make_audio_service(fake_sd)
-        service.play_audio(np.array([], dtype=np.float32), sample_rate=16000)
-        fake_sd.play.assert_called_once()
-        fake_sd.wait.assert_called()
+        ok = service.play_audio(np.array([], dtype=np.float32), sample_rate=16000)
+        assert ok is True
+        fake_sd.play.assert_not_called()
 
     def test_play_calls_wait(self, fake_sd):
         """Successful playback drains the stream via wait()."""

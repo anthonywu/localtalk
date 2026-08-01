@@ -38,7 +38,10 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
 - 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD — auto-listen by default, no button-pressing required
 - 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
-- 🤖 **Language Model**: gpt-oss model via MLX for conversational responses
+- ⚡ **Sentence-streamed speech**: Speaks the first finished sentence as soon as the model produces it — no waiting for the full reply to synthesize
+- 📈 **Local turn metrics**: Each turn appends latency stats to `~/.cache/localtalk/metrics/turns.jsonl` (STT/LLM/TTS, time-to-first-audio); pass `--stats` to print them live
+- 🔔 **Earcons**: Quiet listen / heard / speak / error tones; press **Esc** during a reply to stop remaining speech
+- 🤖 **Language Model**: Defaults to **gpt-oss via MLX**. On **macOS 27+ (Golden Gate)**, opt into Apple **Foundation Models** (`SystemLanguageModel`, on-device Apple Intelligence) with `--llm-provider auto` or `--llm-provider apple`.
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
 - 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
 - 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
@@ -169,6 +172,9 @@ localtalk
 
 # Disable TTS for text-only mode
 localtalk --no-tts
+
+# Save generated responses as WAV files (off by default)
+localtalk --save-audio
 ```
 
 ### Disabling Progress Bars
@@ -215,6 +221,7 @@ localtalk
 **TTS & Output Options:**
 
 - `--no-tts`: Disable TTS for text-only mode
+- `--save-audio`: Save generated TTS responses as WAV files in `audio_outputs/` (off by default)
 - `--show-reasoning`: Show the analysis/commentary reasoning channels in the terminal (hidden by default to reduce noise)
 
 **System Prompt Options:**
@@ -234,6 +241,21 @@ localtalk
 ```bash
 localtalk --model mlx-community/Llama-3.2-3B-Instruct-4bit --whisper-model small.en
 ```
+
+**Force MLX even on macOS 27+** (skip Apple Foundation Models):
+
+```bash
+localtalk --llm-provider mlx
+# or: LOCALTALK_LLM_PROVIDER=mlx localtalk
+```
+
+**Force Apple Foundation Models** (requires macOS 27+ and Apple Intelligence available):
+
+```bash
+localtalk --llm-provider apple
+```
+
+The Apple provider builds a small Swift helper (`localtalk-fm`) into `~/.cache/localtalk/bin/` on first use (`swiftc` / Xcode CLT required).
 
 ## Secrets and API Keys
 
@@ -415,7 +437,6 @@ Startup probes connectivity (unless `--skip-network-probe`). **Default policy is
 
 ### Other Planned Features
 
-- **Real-time streaming**: Stream TTS audio as the response is generated, instead of waiting for the full LLM response
 - **Custom wake words**: "Hey LocalTalk" activation
 - **Model hot-swapping**: Switch between models without restarting
 - **Voice profiles**: Save and switch between different voice configurations

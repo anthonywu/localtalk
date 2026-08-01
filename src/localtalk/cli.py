@@ -5,6 +5,9 @@ import os
 
 # Disable Hugging Face telemetry to ensure complete offline/private capability
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+# Keep tqdm/HF progress bars from stomping Rich Live regions (recording/playback)
+os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 from localtalk.core.assistant import VoiceAssistant  # noqa: E402
 from localtalk.models.config import AppConfig, ReasoningLevel  # noqa: E402
@@ -14,12 +17,25 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
 
+    # LLM provider
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        default="mlx",
+        choices=["auto", "apple", "mlx"],
+        help=(
+            "Language model backend: mlx (default) uses the local GPT OSS model; auto "
+            "uses Apple Foundation Models on macOS 27+ Golden Gate when available, "
+            "otherwise MLX; apple forces "
+            "SystemLanguageModel; mlx forces the Hugging Face MLX model"
+        ),
+    )
     # Model selection
     parser.add_argument(
         "--model",
         type=str,
         default="mlx-community/gpt-oss-20b-MXFP4-Q8",
-        help="MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8)",
+        help="MLX model from Huggingface Hub (default: mlx-community/gpt-oss-20b-MXFP4-Q8); ignored when --llm-provider apple",
     )
     parser.add_argument(
         "--whisper-model",
@@ -85,6 +101,11 @@ def parse_args():
         "--no-tts",
         action="store_true",
         help="Disable TTS and use text-only mode",
+    )
+    parser.add_argument(
+        "--save-audio",
+        action="store_true",
+        help="Save generated TTS responses as WAV files in audio_outputs/ (off by default)",
     )
 
     # Reasoning visibility
@@ -221,6 +242,11 @@ def main():
     config = AppConfig()
 
     # Update model configuration
+    config.llm_provider = args.llm_provider
+    env_provider = os.environ.get("LOCALTALK_LLM_PROVIDER")
+    if env_provider in {"auto", "apple", "mlx"} and args.llm_provider == "auto":
+        # Env only applies when CLI left at default auto
+        config.llm_provider = env_provider  # type: ignore[assignment]
     config.mlx_lm.model = args.model
     config.mlx_lm.temperature = args.temperature
     config.mlx_lm.top_p = args.top_p
@@ -265,6 +291,7 @@ def main():
         config.tts_backend = "none"
     else:
         config.tts_backend = "chatterbox"
+    config.audio.save_generated_audio = args.save_audio
 
     # Enable stats if requested
     config.show_stats = args.stats

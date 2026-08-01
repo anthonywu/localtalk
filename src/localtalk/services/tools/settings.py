@@ -86,7 +86,8 @@ def make_set_tts_tool(set_tts: SetBool) -> ToolSpec:
             "set_tts",
             (
                 "Enable or disable spoken replies (text-to-speech). "
-                "Use when the user says text only, mute voice, turn TTS on/off, or speak again."
+                "Use when the user says text only, mute voice, turn TTS on/off, or speak again. "
+                "To change which TTS *model* is loaded, use set_tts_model instead."
             ),
             {
                 "type": "object",
@@ -107,6 +108,111 @@ def make_set_tts_tool(set_tts: SetBool) -> ToolSpec:
             else (
                 "Okay, text-only mode — I won't speak." if r.get("ok") else "Sorry, I couldn't change text-to-speech."
             )
+        ),
+    )
+
+
+# Whisper sizes accepted by openai-whisper / LocalTalk CLI
+WHISPER_MODEL_SIZES = (
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large",
+    "large-v2",
+    "large-v3",
+    "turbo",
+)
+
+SetSttModel = Callable[..., dict]
+SetTtsModel = Callable[..., dict]
+
+
+def make_set_stt_model_tool(set_stt: SetSttModel) -> ToolSpec:
+    def handler(args: dict) -> dict:
+        model = str(args.get("model", "")).strip()
+        if not model:
+            return {"ok": False, "error": "model is required"}
+        language = args.get("language")
+        lang = str(language).strip() if language is not None else None
+        return set_stt(model, language=lang)
+
+    sizes = ", ".join(WHISPER_MODEL_SIZES)
+    return ToolSpec(
+        name="set_stt_model",
+        description=build_tool_description(
+            "set_stt_model",
+            (
+                "Hot-swap the speech-to-text (Whisper) model without restarting LocalTalk. "
+                f"Allowed model values: {sizes}. "
+                "Optional language code (e.g. en). Use for advanced testing: faster tiny/base "
+                "vs more accurate large/turbo. Loading a new model may take a while and uses more RAM."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "enum": list(WHISPER_MODEL_SIZES),
+                        "description": "Whisper model size to load",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Optional Whisper language code (e.g. en)",
+                    },
+                },
+                "required": ["model"],
+                "additionalProperties": False,
+            },
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: (
+            f"Okay, speech recognition is now using the {r.get('model')} model."
+            if r.get("ok")
+            else f"Sorry, I couldn't change the speech model. {r.get('error') or ''}".strip()
+        ),
+    )
+
+
+def make_set_tts_model_tool(set_tts_model: SetTtsModel) -> ToolSpec:
+    def handler(args: dict) -> dict:
+        model_id = args.get("model_id") or args.get("model")
+        if not model_id or not str(model_id).strip():
+            return {"ok": False, "error": "model_id is required"}
+        return set_tts_model(str(model_id).strip())
+
+    return ToolSpec(
+        name="set_tts_model",
+        description=build_tool_description(
+            "set_tts_model",
+            (
+                "Hot-swap the text-to-speech model without restarting LocalTalk. "
+                "Pass a Hugging Face / mlx-audio model id, for example "
+                "mlx-community/chatterbox-turbo-4bit. "
+                "Loads the new model into memory (may take a while) and enables TTS if it was off. "
+                "Use for advanced voice testing. Prefer set_tts only to mute/unmute without reloading."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "model_id": {
+                        "type": "string",
+                        "description": "mlx-audio / Hugging Face TTS model id to load",
+                    },
+                },
+                "required": ["model_id"],
+                "additionalProperties": False,
+            },
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: (
+            "Okay, I'm using the new text-to-speech model now."
+            if r.get("ok")
+            else f"Sorry, I couldn't change the speech synthesis model. {r.get('error') or ''}".strip()
         ),
     )
 

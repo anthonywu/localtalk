@@ -713,6 +713,8 @@ class TestReasoningToolCalls:
         assert "set_web_tools" in tool_names
         assert Role.DEVELOPER == rendered_msgs[1].author.role
         assert "Online tools are currently ON" in rendered_msgs[1].content[0].instructions
+        assert "never ask whether they want you to search" in rendered_msgs[1].content[0].instructions.lower()
+        assert "Do not ask for approval" in rendered_msgs[1].content[0].instructions
         assert service._max_tool_rounds() == 12
 
     def test_set_web_tools_toggle_mid_session(self, monkeypatch):
