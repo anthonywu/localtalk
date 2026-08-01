@@ -4,7 +4,7 @@ A privacy-first voice assistant that runs entirely offline on Apple Silicon, per
 
 Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
 
-> **Status:** Alpha software (`0.6.0`). It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — but is not yet polished for general use. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+> **Status:** Alpha software (`0.6.0`), but as of August 2026 it is rather usable. It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — though it is not yet polished for general use. We believe we are one or two generations of open-weight models away from it being generally usable. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
 
 ## Why This Project Exists
 
@@ -13,6 +13,8 @@ Plenty of alternative projects exist, but `localtalk` aims for the best one line
 2. **As a vibe check on offline-first AI** - How realistic is it to avoid cloud services like OpenAI and ElevenLabs? This project explores what's possible with local models and helps identify the gaps.
 
 3. **Future-proofing for real-time local AI** - One day soon, these models and consumer computers will be capable of real-time TTS that rivals cloud services. When that day comes, this library will be ready to leverage those improvements immediately.
+
+4. **Abundant access** - We want AI assistance to be effectively free to use: something we can give to students and children without worrying that curiosity or experimentation is quietly racking up API bills. Our long-term goal is for using LocalTalk to cost little more than the electricity required to run it.
 
 ### Why Not Use Apple's Built-in "Say" Command?
 
@@ -396,7 +398,7 @@ MIT License - see LICENSE file for details.
 - Apple MLX team for the efficient ML framework for Apple Silicon
 - MLX-LM community for providing quantized models
 - OpenAI Whisper for speech recognition
-- OpenAI gpt-oss and the `openai-harmony` library for the reasoning model and tool-calling protocol
+- OpenAI gpt-oss and the `openai-harmony` library for the gpt-oss adapter's reasoning and tool-calling protocol
 - Resemble AI for ChatterBox TTS
 
 ## Future Plans & Roadmap
@@ -439,6 +441,7 @@ Startup probes connectivity (unless `--skip-network-probe`). **Default policy is
 
 - **Custom wake words**: "Hey LocalTalk" activation
 - **Model hot-swapping**: Switch between models without restarting
+- **Thinking Machines models**: Evaluate open-weight Inkling models and future Interaction Models as Apple-Silicon-friendly local runtimes emerge. Inkling's native audio input, controllable thinking effort, and tool use are a strong conceptual fit; LocalTalk's provider-adapter boundary can support it alongside the current gpt-oss/Harmony path, rather than as a drop-in model swap.
 - **Voice profiles**: Save and switch between different voice configurations
 - **Plugin system**: Extend functionality with custom modules
 - **Platform support**: Linux support (P2), Windows consideration (P3)

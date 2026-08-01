@@ -257,13 +257,13 @@ class TestGenerateResponse:
         assert len(history) == 2
 
     def test_generate_truncates_history_over_20(self, mock_parser):
-        from openai_harmony import Message, Role
+        from localtalk.services.llm_adapters import ConversationEvent
 
-        mock_parser.messages = [Message.from_role_and_content(Role.ASSISTANT, "reply").with_channel("final")]
+        mock_parser.messages = []
         service = self._make_service()
-        # Pre-fill with 18 Message mocks using real Message objects
+        # Pre-fill with provider-neutral history events.
         for i in range(18):
-            service.chat_history.setdefault("default", []).append(Message.from_role_and_content(Role.USER, f"msg{i}"))
+            service.chat_history.setdefault("default", []).append(ConversationEvent(role="user", content=f"msg{i}"))
 
         service.generate_response("hello")
         history = service.chat_history["default"]
@@ -597,7 +597,7 @@ class TestReasoningToolCalls:
         return Message.from_role_and_content(Role.ASSISTANT, text).with_channel("final")
 
     def test_tool_call_updates_reasoning_effort(self, monkeypatch, capsys):
-        from openai_harmony import ReasoningEffort, Role
+        from openai_harmony import ReasoningEffort
 
         service = self._make_service()
         stop1 = MagicMock(token=10, finish_reason="stop")
@@ -621,11 +621,11 @@ class TestReasoningToolCalls:
         # Full exchange is recorded: user, tool call, tool result, confirmation
         history = service.chat_history["default"]
         assert len(history) == 4
-        assert history[0].author.role == Role.USER
+        assert history[0].role == "user"
         assert history[1].recipient == "functions.set_reasoning_level"
-        assert history[2].author.role == Role.TOOL
+        assert history[2].role == "tool"
         assert history[2].recipient == "assistant"
-        assert history[3].author.role == Role.ASSISTANT
+        assert history[3].role == "assistant"
         assert "Reasoning effort set to: high" in capsys.readouterr().out
 
     def test_tool_call_invalid_level_rejected(self, monkeypatch):
@@ -644,7 +644,7 @@ class TestReasoningToolCalls:
         assert result == "That level doesn't exist."
         assert service.reasoning_effort == ReasoningEffort.LOW  # unchanged
         tool_result = service.chat_history["default"][2]
-        assert "error" in tool_result.content[0].text
+        assert "error" in tool_result.content
 
     def test_tool_call_without_confirmation_uses_spoken_fallback(self, monkeypatch):
         """If the model gives no spoken confirmation, the service speaks one."""
@@ -663,12 +663,14 @@ class TestReasoningToolCalls:
 
     def test_system_and_developer_rendered_every_turn(self, monkeypatch):
         """System (reasoning) and developer (tools) are re-rendered after turn 1."""
-        from openai_harmony import Message, Role
+        from openai_harmony import Role
+
+        from localtalk.services.llm_adapters import ConversationEvent
 
         service = self._make_service()
         service.chat_history["default"] = [
-            Message.from_role_and_content(Role.USER, "earlier question"),
-            Message.from_role_and_content(Role.ASSISTANT, "earlier answer").with_channel("final"),
+            ConversationEvent(role="user", content="earlier question"),
+            ConversationEvent(role="assistant", content="earlier answer", channel="final"),
         ]
         stop = MagicMock(token=10, finish_reason="stop")
         service.stream_generate = MagicMock(return_value=iter([stop]))
@@ -826,8 +828,6 @@ class TestAcquireKnowledgeToolCalls:
         return TestReasoningToolCalls()._make_service()
 
     def test_acquire_knowledge_downloads_default_pack(self, monkeypatch, capsys):
-        from openai_harmony import Role
-
         service = self._make_service()
         service.knowledge_store.acquire.return_value = {
             "ok": True,
@@ -853,7 +853,7 @@ class TestAcquireKnowledgeToolCalls:
         service.knowledge_store.acquire.assert_called_once_with(None)
         history = service.chat_history["default"]
         assert history[1].recipient == "functions.acquire_knowledge"
-        assert history[2].author.role == Role.TOOL
+        assert history[2].role == "tool"
         assert "Acquiring knowledge pack" in capsys.readouterr().out
 
     def test_acquire_knowledge_list_pack(self, monkeypatch):
