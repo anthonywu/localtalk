@@ -21,12 +21,6 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ.setdefault("TQDM_DISABLE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-# Apply MLX compatibility patches early
-try:
-    import localtalk.utils.mlx_compat  # noqa: F401
-except ImportError:
-    pass
-
 from importlib.metadata import PackageNotFoundError, version  # noqa: E402
 
 try:

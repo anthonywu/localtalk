@@ -15,6 +15,9 @@ from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 
+# Apply MLX compatibility patches before importing services that use MLX. This
+# remains lazy at package import time so the CLI can handle an immediate Ctrl+C.
+import localtalk.utils.mlx_compat  # noqa: F401
 from localtalk.models.config import AppConfig
 from localtalk.services.apple_llm import resolve_llm_provider
 from localtalk.services.audio import AudioService

@@ -133,7 +133,7 @@ class TestMain:
 
         with (
             patch("sys.argv", argv),
-            patch("localtalk.cli.VoiceAssistant", return_value=mock_assistant) as mock_va_class,
+            patch("localtalk.core.assistant.VoiceAssistant", return_value=mock_assistant) as mock_va_class,
         ):
             main()
             return mock_va_class, mock_assistant
@@ -289,7 +289,7 @@ class TestMain:
         """A missing --system-prompt-file should print an error and return without creating the assistant."""
         with (
             patch("sys.argv", ["localtalk", "--system-prompt-file", "/nonexistent/prompt.txt"]),
-            patch("localtalk.cli.VoiceAssistant") as mock_va,
+            patch("localtalk.core.assistant.VoiceAssistant") as mock_va,
         ):
             main()
         assert not mock_va.called
@@ -298,7 +298,7 @@ class TestMain:
         """--test-mic should not create a VoiceAssistant."""
         with (
             patch("sys.argv", ["localtalk", "--test-mic"]),
-            patch("localtalk.cli.VoiceAssistant") as mock_va,
+            patch("localtalk.core.assistant.VoiceAssistant") as mock_va,
             patch("localtalk.services.audio.AudioService") as mock_audio_cls,
         ):
             mock_audio = MagicMock()
@@ -307,6 +307,12 @@ class TestMain:
             main()
         assert not mock_va.called
         assert mock_audio.test_microphone.called
+
+    def test_main_interrupt_during_startup_prints_clean_goodbye(self, capsys):
+        with patch("localtalk.cli._main", side_effect=KeyboardInterrupt):
+            main()
+
+        assert capsys.readouterr().out == "\nGoodbye.\n"
 
     def test_main_default_prompt_file_loaded(self, tmp_path, monkeypatch):
         """When no --system-prompt or --system-prompt-file, default prompts/default.txt is loaded."""

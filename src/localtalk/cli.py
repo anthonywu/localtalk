@@ -9,10 +9,6 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ.setdefault("TQDM_DISABLE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-from localtalk.core.assistant import VoiceAssistant  # noqa: E402
-from localtalk.models.config import AppConfig, ReasoningLevel  # noqa: E402
-
-
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
@@ -211,7 +207,20 @@ def parse_args():
 
 
 def main():
-    """Main entry point for the CLI."""
+    """Run the CLI and exit cleanly when interrupted at any startup stage."""
+    try:
+        _main()
+    except KeyboardInterrupt:
+        print("\nGoodbye.")
+
+
+def _main():
+    """Main CLI implementation."""
+    # Keep application imports inside ``main``'s interrupt boundary. Importing
+    # MLX can take long enough for an immediate Ctrl+C to otherwise display a
+    # traceback before the assistant's own shutdown handler is installed.
+    from localtalk.models.config import AppConfig, ReasoningLevel
+
     args = parse_args()
 
     # Handle --test-mic early (before loading heavy models)
@@ -342,6 +351,8 @@ def main():
         config.browser_tools.headed = True
 
     # Create and run assistant
+    from localtalk.core.assistant import VoiceAssistant
+
     assistant = VoiceAssistant(config)
     assistant.run()
 
