@@ -6,17 +6,30 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from openai_harmony import ToolDescription
-
 ToolHandler = Callable[[dict], dict]
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """Provider-neutral function-tool metadata owned by LocalTalk."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+    def as_harmony(self):
+        """Render this definition for the gpt-oss Harmony adapter only."""
+        from openai_harmony import ToolDescription
+
+        return ToolDescription.new(self.name, self.description, self.parameters)
 
 
 @dataclass
 class ToolSpec:
-    """A registered Harmony function tool."""
+    """A registered LocalTalk function tool."""
 
     name: str
-    description: ToolDescription
+    description: ToolDefinition
     handler: ToolHandler
     spoken_fallback: Callable[[dict, dict], str] | None = None
 
@@ -30,7 +43,7 @@ class ToolRegistry:
     def register(self, spec: ToolSpec) -> None:
         self.tools[spec.name] = spec
 
-    def descriptions(self) -> list[ToolDescription]:
+    def descriptions(self) -> list[ToolDefinition]:
         return [spec.description for spec in self.tools.values()]
 
     def names(self) -> list[str]:
@@ -57,6 +70,6 @@ class ToolRegistry:
         return "Sorry, I couldn't complete that tool request."
 
 
-def build_tool_description(name: str, description: str, parameters: dict[str, Any]) -> ToolDescription:
-    """Create a Harmony ToolDescription from a JSON-schema-like parameters object."""
-    return ToolDescription.new(name, description, parameters)
+def build_tool_description(name: str, description: str, parameters: dict[str, Any]) -> ToolDefinition:
+    """Create provider-neutral JSON-schema-like tool metadata."""
+    return ToolDefinition(name, description, parameters)

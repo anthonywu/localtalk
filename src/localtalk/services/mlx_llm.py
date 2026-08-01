@@ -11,14 +11,9 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from openai_harmony import (
-    Author,
     Conversation,
-    DeveloperContent,
     HarmonyEncoding,
-    Message,
-    Role,
     StreamableParser,
-    SystemContent,
     load_harmony_encoding,
 )
 from rich.console import Console
@@ -27,6 +22,7 @@ from localtalk.knowledge.query import KnowledgeQueryService
 from localtalk.knowledge.store import KnowledgeStore, get_default_store
 from localtalk.models.config import BrowserToolsConfig, MLXLMConfig, ReasoningLevel, WebToolsConfig
 from localtalk.services.browser.session import BrowserSession
+from localtalk.services.llm_adapters import ConversationEvent, HarmonyAdapter, ToolCall
 from localtalk.services.tools.base import ToolRegistry
 from localtalk.services.tools.browser import make_browser_tools
 from localtalk.services.tools.knowledge import make_acquire_knowledge_tool, make_query_knowledge_tool
@@ -118,7 +114,7 @@ class MLXLanguageModelService:
         self.config = config
         self.system_prompt = system_prompt
         self.console = console or Console()
-        self.chat_history: dict[str, list[Message]] = {}
+        self.chat_history: dict[str, list[ConversationEvent]] = {}
         self.reasoning_effort = reasoning_effort_for(config.reasoning_effort)
         self.knowledge_store = knowledge_store or get_default_store(console=self.console)
         self.knowledge_query = KnowledgeQueryService(self.knowledge_store)
@@ -329,8 +325,23 @@ class MLXLanguageModelService:
         except Exception as e:
             self.console.print(f"[yellow]Warning: could not register Harmony stop tokens: {e}[/yellow]")
         self.console.print("[green]Harmony encoding initialized.")
+        self.adapter = HarmonyAdapter(
+            self.harmony,
+            parser_factory=StreamableParser,
+            conversation_factory=Conversation.from_messages,
+        )
 
-    def _get_session_history(self, session_id: str) -> list[Message]:
+    def _adapter(self) -> HarmonyAdapter:
+        """Return the active provider adapter (lazy for lightweight unit fixtures)."""
+        if not hasattr(self, "adapter"):
+            self.adapter = HarmonyAdapter(
+                self.harmony,
+                parser_factory=StreamableParser,
+                conversation_factory=Conversation.from_messages,
+            )
+        return self.adapter
+
+    def _get_session_history(self, session_id: str) -> list[ConversationEvent]:
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
         return self.chat_history[session_id]
@@ -362,22 +373,22 @@ class MLXLanguageModelService:
             self.console.print(f"[red]Error saving audio to temp file: {e}")
             raise OSError(f"Failed to save audio to temporary file: {e}") from e
 
-    def _build_prompt_messages(self, history: list[Message], extra: list[Message]) -> list[Message]:
-        sys_content = SystemContent.new().with_reasoning_effort(self.reasoning_effort)
-        dev_content = (
-            DeveloperContent.new()
-            .with_instructions(self._developer_instructions())
-            .with_function_tools(self.tool_registry.descriptions())
+    def _render_prompt(self, history: list[ConversationEvent], extra: list[ConversationEvent]) -> list[int]:
+        """Render LocalTalk events through the active model-family adapter."""
+        return self._adapter().render_prompt(
+            [*history, *extra],
+            developer_instructions=self._developer_instructions(),
+            tools=self.tool_registry.descriptions(),
+            reasoning_effort=self.reasoning_effort,
         )
-        return [
-            Message.from_role_and_content(Role.SYSTEM, sys_content),
-            Message.from_role_and_content(Role.DEVELOPER, dev_content),
-            *history,
-            *extra,
-        ]
 
-    def _record_turn(self, session_id: str, history: list[Message], new_messages: list[Message]) -> None:
-        history.extend(new_messages)
+    def _record_turn(
+        self,
+        session_id: str,
+        history: list[ConversationEvent],
+        new_events: list[ConversationEvent],
+    ) -> None:
+        history.extend(new_events)
         max_msgs = self.config.history_max_messages
         if len(history) > max_msgs:
             self.chat_history[session_id] = history[-max_msgs:]
@@ -410,10 +421,10 @@ class MLXLanguageModelService:
 
         generated_tokens: list[int] = []
         finish_reason: str | None = None
-        live_parser: StreamableParser | None = None
+        live_parser = None
         last_final = ""
         if on_final_text is not None:
-            live_parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
+            live_parser = self._adapter().new_stream_parser()
 
         # When streaming speech via on_final_text, the sink may start a Rich Live
         # playback display. Nested Live (status spinner + waveform) raises LiveError
@@ -480,81 +491,32 @@ class MLXLanguageModelService:
         for chunk in chunks:
             sink(chunk)
 
-    def _parse_response(self, generated_tokens: list[int], debug_mode: bool) -> tuple[str, list[Message]]:
+    def _parse_response(self, generated_tokens: list[int], debug_mode: bool) -> tuple[str, list[ConversationEvent], ToolCall | None]:
         if debug_mode:
-            raw_text = self.harmony.decode(generated_tokens)
+            raw_text = self._adapter().encoding.decode(generated_tokens)
             self.console.print(f"[magenta][DEBUG] Raw tokens decoded ({len(generated_tokens)} tokens):[/magenta]")
             self.console.print(f"[dim]{raw_text!r}[/dim]")
 
-        parser = StreamableParser(self.harmony, Role.ASSISTANT, strict=False)
-        for tok in generated_tokens:
-            parser.process(tok)
-        try:
-            parser.process_eos()
-        except Exception:
-            pass
-
-        parsed_messages = parser.messages
+        completion = self._adapter().parse_completion(generated_tokens, debug=debug_mode)
         if debug_mode:
-            self.console.print(f"[magenta][DEBUG] Parsed {len(parsed_messages)} message(s)[/magenta]")
+            self.console.print(f"[magenta][DEBUG] Parsed {len(completion.events)} event(s)[/magenta]")
 
-        clean_response = ""
-        for msg in parsed_messages:
-            msg_text = ""
-            for content in msg.content:
-                if hasattr(content, "text"):
-                    msg_text = content.text.strip()
-                    break
-
-            channel = msg.channel or "(no channel)"
+        for event in completion.events:
+            channel = event.channel or "(no channel)"
             if debug_mode:
-                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {msg_text}")
-
-            if msg.channel == "final":
-                clean_response = msg_text
-            elif msg.channel in ("analysis", "commentary"):
+                self.console.print(f"[magenta][DEBUG {channel}][/magenta] {event.content.strip()}")
+            if event.channel in ("analysis", "commentary"):
                 if debug_mode or self.config.show_reasoning:
-                    self.console.print(f"[dim][{msg.channel}] {msg_text}[/dim]")
+                    self.console.print(f"[dim][{event.channel}] {event.content.strip()}[/dim]")
 
-        if not clean_response and parsed_messages:
-            for msg in reversed(parsed_messages):
-                if msg.channel in ("analysis", "commentary"):
-                    continue
-                for content in msg.content:
-                    if hasattr(content, "text") and content.text.strip():
-                        clean_response = content.text.strip()
-                        break
-                if clean_response:
-                    break
-
-        return clean_response, parsed_messages
-
-    def _extract_function_tool_call(self, parsed_messages: list[Message]) -> tuple[Message, str, dict] | None:
-        for msg in reversed(parsed_messages):
-            recipient = msg.recipient or ""
-            if not recipient.startswith("functions."):
-                continue
-            tool_name = recipient.removeprefix("functions.")
-            args_text = ""
-            for content in msg.content:
-                if hasattr(content, "text"):
-                    args_text = content.text
-                    break
-            try:
-                args = json.loads(args_text) if args_text.strip() else {}
-            except json.JSONDecodeError:
-                args = {}
-            if not isinstance(args, dict):
-                args = {}
-            return msg, tool_name, args
-        return None
+        return completion.final_text.strip(), completion.events, completion.tool_call
 
     def _run_tool_loop(
         self,
         text: str,
         session_id: str,
-        history: list[Message],
-        first_call: tuple[Message, str, dict],
+        history: list[ConversationEvent],
+        first_call: ToolCall,
         debug_mode: bool,
         on_spoken_sentence: SpokenSentenceSink | None = None,
     ) -> str:
@@ -567,9 +529,8 @@ class MLXLanguageModelService:
         When *on_spoken_sentence* is set, the final answer is streamed into the sink
         (live during the last follow-up generation when possible).
         """
-        user_message = Message.from_role_and_content(Role.USER, text)
-        exchange: list[Message] = [user_message]
-        call_msg, tool_name, args = first_call
+        exchange: list[ConversationEvent] = [ConversationEvent(role="user", content=text)]
+        tool_name, args = first_call.name, first_call.arguments
         last_tool_name = tool_name
         last_result: dict = {}
         last_args = args
@@ -579,21 +540,25 @@ class MLXLanguageModelService:
         def _dispatch_and_followup(
             *,
             stream_final: bool = False,
-        ) -> tuple[str, tuple[Message, str, dict] | None]:
-            nonlocal last_tool_name, last_result, last_args, call_msg, tool_name, args
+        ) -> tuple[str, ToolCall | None]:
+            nonlocal last_tool_name, last_result, last_args, tool_name, args
             result = self.tool_registry.dispatch(tool_name, args)
             last_tool_name, last_result, last_args = tool_name, result, args
-            recipient = f"functions.{tool_name}"
-            tool_response = (
-                Message.from_author_and_content(Author.new(Role.TOOL, recipient), json.dumps(result))
-                .with_channel("commentary")
-                .with_recipient("assistant")
+            tool_call_event = ConversationEvent(
+                role="assistant",
+                content=json.dumps(args),
+                channel="commentary",
+                recipient=f"functions.{tool_name}",
             )
-            exchange.extend([call_msg, tool_response])
+            tool_response = ConversationEvent(
+                role="tool",
+                content=json.dumps(result),
+                channel="commentary",
+                recipient="assistant",
+            )
+            exchange.extend([tool_call_event, tool_response])
 
-            followup_messages = self._build_prompt_messages(history, exchange)
-            conversation = Conversation.from_messages(followup_messages)
-            prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
+            prompt_tokens = self._render_prompt(history, exchange)
 
             emitted_end = 0
 
@@ -609,8 +574,7 @@ class MLXLanguageModelService:
                 on_final_text=on_final if (stream_final and on_spoken_sentence) else None,
                 status_message="Working on it...",
             )
-            clean_response, parsed_messages = self._parse_response(followup_tokens, debug_mode)
-            next_call = self._extract_function_tool_call(parsed_messages)
+            clean_response, _, next_call = self._parse_response(followup_tokens, debug_mode)
             if stream_final and on_spoken_sentence is not None and next_call is None and clean_response:
                 self._flush_spoken_remainder(clean_response, emitted_end, on_spoken_sentence)
             return clean_response, next_call
@@ -623,7 +587,7 @@ class MLXLanguageModelService:
             rounds_used += 1
 
             if next_call is not None:
-                call_msg, tool_name, args = next_call
+                tool_name, args = next_call.name, next_call.arguments
                 pending = True
                 continue
 
@@ -632,7 +596,7 @@ class MLXLanguageModelService:
                 clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
             if on_spoken_sentence is not None:
                 self._emit_spoken_chunks(clean_response, on_spoken_sentence)
-            exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+            exchange.append(ConversationEvent(role="assistant", content=clean_response, channel="final"))
             self._record_turn(session_id, history, exchange)
             return clean_response
 
@@ -643,14 +607,14 @@ class MLXLanguageModelService:
                 clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
             if on_spoken_sentence is not None:
                 self._emit_spoken_chunks(clean_response, on_spoken_sentence)
-            exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+            exchange.append(ConversationEvent(role="assistant", content=clean_response, channel="final"))
             self._record_turn(session_id, history, exchange)
             return clean_response
 
         clean_response = self.tool_registry.spoken_fallback(last_tool_name, last_result, last_args)
         if on_spoken_sentence is not None:
             self._emit_spoken_chunks(clean_response, on_spoken_sentence)
-        exchange.append(Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"))
+        exchange.append(ConversationEvent(role="assistant", content=clean_response, channel="final"))
         self._record_turn(session_id, history, exchange)
         return clean_response
 
@@ -690,10 +654,8 @@ class MLXLanguageModelService:
             if not text or text == "Listen to this audio and respond conversationally to what you hear.":
                 text = "Please process the audio input and respond."
 
-        user_message = Message.from_role_and_content(Role.USER, text)
-        messages = self._build_prompt_messages(history, [user_message])
-        conversation = Conversation.from_messages(messages)
-        prompt_tokens = self.harmony.render_conversation_for_completion(conversation, Role.ASSISTANT)
+        user_event = ConversationEvent(role="user", content=text)
+        prompt_tokens = self._render_prompt(history, [user_event])
         debug_mode = os.environ.get("LOCALTALK_DEBUG") == "1"
 
         # Live final-channel speech: gpt-oss tool calls live on the commentary
@@ -718,9 +680,7 @@ class MLXLanguageModelService:
             except Exception as e:
                 self.console.print(f"[yellow]Warning: Failed to clean up temp file {audio_file}: {e}")
 
-        clean_response, parsed_messages = self._parse_response(generated_tokens, debug_mode)
-
-        tool_call = self._extract_function_tool_call(parsed_messages)
+        clean_response, _, tool_call = self._parse_response(generated_tokens, debug_mode)
         if tool_call is not None:
             # Tool path: final speech comes after tools (any accidental pre-tool
             # final text was already emitted above — rare for gpt-oss).
@@ -748,7 +708,7 @@ class MLXLanguageModelService:
                 retry_max_tokens,
                 on_final_text=on_final if on_spoken_sentence else None,
             )
-            clean_response, _ = self._parse_response(generated_tokens, debug_mode)
+            clean_response, _, _ = self._parse_response(generated_tokens, debug_mode)
 
         if on_spoken_sentence is not None and clean_response:
             self._flush_spoken_remainder(clean_response, emitted_end, on_spoken_sentence)
@@ -757,10 +717,7 @@ class MLXLanguageModelService:
             self._record_turn(
                 session_id,
                 history,
-                [
-                    user_message,
-                    Message.from_role_and_content(Role.ASSISTANT, clean_response).with_channel("final"),
-                ],
+                [user_event, ConversationEvent(role="assistant", content=clean_response, channel="final")],
             )
         else:
             self.console.print("[yellow]No usable response generated; skipping history for this turn.[/yellow]")
