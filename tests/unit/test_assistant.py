@@ -260,6 +260,81 @@ class TestSttTtsModelHotSwap:
         assert assistant.config.response_language == "Simplified Chinese"
         ctor.assert_called_once()
 
+    def test_set_tts_model_resets_language_pairing(self):
+        """A mid-session ChatterBox swap must not leave the session stuck in
+        Chinese mode (English voice speaking mandated Chinese)."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.chatterbox.model_id = "old-model"
+        assistant.config.whisper.language = "zh"
+        assistant._set_session_language("Simplified Chinese")
+        assert assistant.config.response_language == "Simplified Chinese"
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is True
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        assert "respond only in English" in assistant.config.system_prompt
+
+    def test_set_tts_model_noop_also_resets_language_pairing(self):
+        """The 'already using this model' fast path re-asserts English too."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.language = "zh"
+        assistant._set_session_language("Simplified Chinese")
+        result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is False
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+
+    def test_set_tts_model_same_model_does_not_noop_when_backend_is_chinese(self):
+        """Same ChatterBox model id while Qwen/macOS backend is active must
+        reload ChatterBox, not claim 'already using this TTS model'."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()  # the active Qwen service
+        assistant.config.tts_backend = "qwen_chinese"
+        assistant.config.whisper.language = "zh"
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is True
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        ctor.assert_called_once()
+
+    def test_set_tts_backend_rejects_en_only_whisper_for_chinese(self):
+        """English-only Whisper checkpoints cannot transcribe Chinese; the
+        switch must fail loudly before touching any state."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.model_size = "small.en"
+        result = assistant._tool_set_tts_backend("macos_tingting")
+        assert result["ok"] is False
+        assert "English-only" in result["error"]
+        assert "small" in result["error"]  # suggests the multilingual twin
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+
+    def test_set_tts_backend_en_only_whisper_still_allows_english(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.model_size = "small.en"
+        result = assistant._tool_set_tts_backend("chatterbox_turbo")
+        assert result["ok"] is True
+
 
 # ────────────────────────── _init_services ──────────────────────────
 

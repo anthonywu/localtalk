@@ -552,7 +552,16 @@ class VoiceAssistant:
         model_id = (model_id or "").strip()
         if not model_id:
             return {"ok": False, "error": "model_id is required"}
-        if model_id == self.config.chatterbox.model_id and self.tts is not None:
+        if (
+            model_id == self.config.chatterbox.model_id
+            and self.tts is not None
+            and self.config.tts_backend == "chatterbox"
+        ):
+            # Already on this ChatterBox model; still re-assert the English
+            # language pairing in case a previous Chinese session left
+            # zh state behind (Whisper input language + response directive).
+            self.config.whisper.language = "en"
+            self._set_session_language("English")
             return {
                 "ok": True,
                 "model_id": model_id,
@@ -577,6 +586,12 @@ class VoiceAssistant:
         self.tts = new_tts
         self._tts_cached = None  # old instance is obsolete
         self.config.tts_backend = "chatterbox"
+        # ChatterBox speaks English: re-pair the STT input language and the
+        # session response directive with the voice, mirroring
+        # _tool_set_tts_backend, so a Chinese session can't end up with an
+        # English voice speaking mandated Chinese (or vice versa).
+        self.config.whisper.language = "en"
+        self._set_session_language("English")
         if old_tts is not None:
             del old_tts
             import gc
@@ -594,10 +609,23 @@ class VoiceAssistant:
         """Hot-swap matching speech input and output language backends."""
         target = {
             "qwen_chinese": "qwen_chinese",
+            # The tool-facing name is the voice; config keeps the backend name.
             "macos_tingting": "macos_say",
         }.get(backend, "chatterbox")
         is_chinese = target in {"qwen_chinese", "macos_say"}
         stt_language = "zh" if is_chinese else "en"
+        if is_chinese and self.config.whisper.model_size.endswith(".en"):
+            # English-only Whisper checkpoints cannot transcribe Chinese; fail
+            # before touching any state instead of switching into a broken pair.
+            multilingual = self.config.whisper.model_size[: -len(".en")]
+            return {
+                "ok": False,
+                "error": (
+                    f"Whisper model {self.config.whisper.model_size!r} is English-only and cannot "
+                    f"transcribe Chinese. Switch the STT model to a multilingual size first "
+                    f"(e.g. 'use whisper {multilingual}'), then ask for Chinese again."
+                ),
+            }
         if target == self.config.tts_backend and self.tts is not None:
             self.config.whisper.language = stt_language
             self._set_session_language("Simplified Chinese" if is_chinese else "English")
