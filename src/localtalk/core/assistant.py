@@ -1,5 +1,6 @@
 """Main voice assistant implementation."""
 
+import re
 import select
 import signal
 import sys
@@ -1100,15 +1101,53 @@ class VoiceAssistant:
         The model can normally call ``set_tts_backend`` itself, but commands such
         as "let's switch to Chinese" must change the synthesizer before it tries
         to speak a reply in that language.
+
+        Matching is deliberately conservative — a false positive hijacks the
+        user's turn, while a miss just falls through to the LLM, which can
+        still call ``set_tts_backend`` itself.
         """
+        stripped = text.strip()
+        # Questions are usually *about* a language, not switch commands
+        # ("Do you use Chinese in your answers?", "怎么使用中文输入法？").
+        if stripped.endswith(("?", "？")):
+            return False
         normalized = " ".join(text.casefold().replace("'", "").split())
         wants_tingting = "tingting" in normalized or "ting ting" in normalized or "婷婷" in text
         wants_qwen = "qwen" in normalized
-        wants_chinese = "chinese" in normalized or "mandarin" in normalized or "中文" in text or "普通话" in text
-        wants_switch = any(word in normalized for word in ("switch", "change", "use")) or "切换" in text or "使用" in text
-        wants_english = "english" in normalized or "英语" in text
-        if not wants_switch or not (wants_tingting or wants_qwen or wants_chinese or wants_english):
+        wants_chinese = (
+            "chinese" in normalized
+            or "mandarin" in normalized
+            or any(word in text for word in ("中文", "普通话", "汉语", "国语", "华语"))
+        )
+        wants_english = "english" in normalized or "英语" in text or "英文" in text
+        wants_cantonese = "cantonese" in normalized or any(word in text for word in ("粤语", "廣東話", "广东话"))
+        if not (wants_tingting or wants_qwen or wants_chinese or wants_english or wants_cantonese):
             return False
+        # The utterance must *open* with an imperative verb, so statements such
+        # as "I use Chinese at work" don't hijack the turn. (Apostrophes are
+        # stripped above, so "let's" arrives as "lets".)
+        en_command = re.match(
+            r"^(?:please\b[,\s]*|lets\s+|let us\s+|can you\s+|could you\s+|can we\s+|could we\s+)*"
+            r"(?:switch|change|swap|speak|talk|respond|answer|use)\b",
+            normalized,
+        )
+        zh_command = re.match(
+            r"^(?:请|請|麻烦|麻煩|帮我|幫我)?\s*(?:我们|我們)?\s*(?:切换|切換|换成|換成|换|換|说|說|讲|講|用|使用)",
+            stripped,
+        )
+        if not (en_command or zh_command):
+            return False
+
+        # Cantonese is a common adjacent request; answer it explicitly rather
+        # than silently pairing it with the Mandarin voices.
+        if wants_cantonese:
+            message = (
+                "抱歉，我暂时还不会说粤语，不过随时可以切换成普通话。"
+                if any("一" <= ch <= "鿿" for ch in text)
+                else "Sorry, I can't speak Cantonese yet — but I can switch to Mandarin Chinese anytime."
+            )
+            self._announce_spoken(message)
+            return True
 
         backend = (
             "qwen_chinese"
@@ -1126,7 +1165,9 @@ class VoiceAssistant:
                 if backend == "macos_tingting"
                 else "Switched to the fast English voice."
             )
-            print_assistant_utterance(self.console, confirmation)
+            # Speak the confirmation with the newly loaded voice — this doubles
+            # as an audible demo of the switch the user just asked for.
+            self._announce_spoken(confirmation)
         else:
             print_assistant_utterance(
                 self.console,

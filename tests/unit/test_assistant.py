@@ -336,6 +336,87 @@ class TestSttTtsModelHotSwap:
         assert result["ok"] is True
 
 
+# ────────────────────── _handle_direct_tts_backend_command ──────────────────────
+
+
+class TestDirectTtsBackendCommand:
+    def _make_assistant(self, *, backend: str = "macos_tingting"):
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.llm = MagicMock()
+        assistant.tts = MagicMock()
+        assistant.audio = MagicMock()
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True, "backend": backend})
+        return assistant
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Questions *about* Chinese are not switch commands.
+            "Do you use Chinese in your answers?",
+            "What is the Chinese word for hello?",
+            "怎么使用中文输入法？",
+            "你能说中文吗？",
+            # Statements mentioning Chinese are not commands either.
+            "I use Chinese at work",
+            "My Chinese homework is hard",
+        ],
+    )
+    def test_questions_and_statements_do_not_hijack_turn(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is False
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("text", "backend"),
+        [
+            ("Let's switch to Chinese", "macos_tingting"),
+            ("Use Qwen Chinese voice", "qwen_chinese"),
+            ("switch to the fast English voice", "chatterbox_turbo"),
+            ("Please change to English", "chatterbox_turbo"),
+            ("说中文", "macos_tingting"),
+            ("切换到中文", "macos_tingting"),
+            ("用中文回答", "macos_tingting"),
+            ("请说中文吧", "macos_tingting"),
+        ],
+    )
+    def test_commands_switch_backend(self, text, backend):
+        assistant = self._make_assistant(backend=backend)
+        assert assistant._handle_direct_tts_backend_command(text) is True
+        assistant._tool_set_tts_backend.assert_called_once_with(backend)
+
+    def test_confirmation_spoken_with_new_voice(self):
+        assistant = self._make_assistant()
+        assistant.tts.synthesize_long_form.return_value = (24000, np.array([0.1, -0.1], dtype=np.float32))
+        assert assistant._handle_direct_tts_backend_command("Let's switch to Chinese") is True
+        assistant.tts.synthesize_long_form.assert_called_once()
+        spoken_text = assistant.tts.synthesize_long_form.call_args[0][0]
+        assert "Tingting" in spoken_text
+        assistant.audio.play_audio.assert_called_once()
+
+    def test_failed_switch_prints_error_without_speaking(self):
+        assistant = self._make_assistant()
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+        assert assistant._handle_direct_tts_backend_command("Let's switch to Chinese") is True
+        assistant.tts.synthesize.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_not_called()
+
+    @pytest.mark.parametrize("text", ["switch to Cantonese", "说粤语", "切换到广东话", "講廣東話好唔好"])
+    def test_cantonese_gets_explicit_unsupported_reply(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is True
+        # No backend switch — just a spoken, bilingual-capable explanation.
+        assistant._tool_set_tts_backend.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_called_once()
+
+    @pytest.mark.parametrize("text", ["Do you speak Cantonese?", "你会说粤语吗？", "我唔識講廣東話"])
+    def test_cantonese_questions_and_statements_fall_through(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is False
+        assistant._tool_set_tts_backend.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_not_called()
+
+
 # ────────────────────────── _init_services ──────────────────────────
 
 
