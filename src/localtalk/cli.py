@@ -12,7 +12,17 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 def parse_args():
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
+    parser = argparse.ArgumentParser(
+        description="Local Voice Assistant with speech recognition, LLM, and TTS",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Upgrade voices:\n"
+            "  Run `localtalk --list-voices` to list installed Apple Speech voices by\n"
+            "  quality tier (Default / Enhanced / Premium), see which one is auto-selected,\n"
+            "  and learn how to download higher-quality voices. LocalTalk auto-selects the\n"
+            "  best installed voice on startup, so installing a Premium voice is enough."
+        ),
+    )
 
     # LLM provider
     parser.add_argument(
@@ -130,8 +140,8 @@ def parse_args():
     parser.add_argument(
         "--list-voices",
         action="store_true",
-        help="List installed Apple Speech voices by quality tier and exit "
-        "(shows how to download Enhanced/Premium voices)",
+        help="List installed Apple Speech voices by quality tier (Default/Enhanced/Premium) "
+        "and exit — marks the auto-selected voice and shows how to upgrade to higher-quality voices",
     )
 
     # VAD options
@@ -276,11 +286,12 @@ def _run_list_voices() -> None:
             "\n[yellow]Only Default-tier voices are installed. Higher-quality "
             "Enhanced/Premium voices may be available from Apple.[/yellow]"
         )
-        console.print("\n[bold]To download more voices:[/bold]")
+        console.print("\n[bold]Upgrade to Enhanced/Premium:[/bold]")
         console.print("  1. Open System Settings")
         console.print("  2. Accessibility → Spoken Content → System Voices")
         console.print("     (some voices also appear under System Settings → Keyboard → Dictation)")
         console.print("  3. Download an Enhanced or Premium voice, then restart localtalk")
+        console.print("     (it auto-selects the best installed voice — no config change needed)")
         console.print("\n  Launch System Settings directly:")
         console.print('  [dim]open -a "System Settings"[/dim]\n')
 

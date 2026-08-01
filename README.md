@@ -38,15 +38,15 @@ Built with speech recognition (Whisper), language model processing (gpt-oss/MLX)
 
 ### Higher-Quality Voices
 
-Apple ships `AVSpeechSynthesizer` voices in three quality tiers — **Default**, **Enhanced**, and **Premium** — where Enhanced/Premium sound noticeably more natural but must be downloaded separately. LocalTalk auto-selects the highest-quality *natural* voice installed for the configured language (eloquence/character voices are deprioritized). So once you download a Premium Tingting, LocalTalk uses it automatically on the next start — no config change needed.
+**Want better Chinese speech?** Apple ships `AVSpeechSynthesizer` voices in three quality tiers — **Default**, **Enhanced**, and **Premium** — where Enhanced/Premium sound noticeably more natural but must be downloaded separately. LocalTalk auto-selects the highest-quality *natural* voice installed for the configured language (eloquence/character voices are deprioritized). So once you download a Premium Tingting, LocalTalk uses it automatically on the next start — **no config change needed**.
 
-To see what's installed and get download guidance, run:
+To see what's installed and get step-by-step download guidance, run:
 
 ```bash
 localtalk --list-voices
 ```
 
-To download a higher tier: open **System Settings → Accessibility → Spoken Content → System Voices** (some voices also appear under System Settings → Keyboard → Dictation) and install an Enhanced or Premium voice. To pin a specific voice explicitly, set `voice_identifier` in `AppleSpeechConfig` (the identifier is shown by `--list-voices`).
+**To upgrade:** open **System Settings → Accessibility → Spoken Content → System Voices** (some voices also appear under System Settings → Keyboard → Dictation) and install an Enhanced or Premium voice, then restart LocalTalk. To pin a specific voice explicitly instead of auto-select, set `voice_identifier` in `AppleSpeechConfig` (the identifier is shown by `--list-voices`).
 
 ## Why "LocalTalk"?
 
@@ -261,10 +261,11 @@ localtalk
 - `--system-prompt TEXT`: Custom system prompt for the LLM (inline)
 - `--system-prompt-file PATH`: Path to a text file with a custom system prompt (takes precedence over `--system-prompt`; if neither is given, the bundled [`prompts/default.txt`](prompts/default.txt) is used)
 
-**Diagnostics:**
+**Diagnostics & info:**
 
 - `--stats`: Show timing statistics for the STT, LLM, and TTS steps each turn
 - `--test-mic`: Test microphone input levels and exit (useful for diagnosing audio issues before running the assistant)
+- `--list-voices`: List installed Apple Speech voices by quality tier (Default/Enhanced/Premium) and exit — marks the auto-selected voice and shows how to **upgrade** to higher-quality voices (see [Higher-Quality Voices](#higher-quality-voices))
 
 ### Example Configurations
 
