@@ -41,7 +41,7 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 - ⚡ **Sentence-streamed speech**: Speaks the first finished sentence as soon as the model produces it — no waiting for the full reply to synthesize
 - 📈 **Local turn metrics**: Each turn appends latency stats to `~/.cache/localtalk/metrics/turns.jsonl` (STT/LLM/TTS, time-to-first-audio); pass `--stats` to print them live
 - 🔔 **Earcons**: Quiet listen / heard / speak / error tones; press **Esc** during a reply to stop remaining speech
-- 🤖 **Language Model**: On **macOS 27+ (Golden Gate)**, defaults to Apple **Foundation Models** (`SystemLanguageModel`, on-device Apple Intelligence) when available; otherwise **gpt-oss via MLX**. Override with `--llm-provider apple|mlx|auto`
+- 🤖 **Language Model**: Defaults to **gpt-oss via MLX**. On **macOS 27+ (Golden Gate)**, opt into Apple **Foundation Models** (`SystemLanguageModel`, on-device Apple Intelligence) with `--llm-provider auto` or `--llm-provider apple`.
 - 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
 - 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
 - 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session

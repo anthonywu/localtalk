@@ -21,11 +21,12 @@ def parse_args():
     parser.add_argument(
         "--llm-provider",
         type=str,
-        default="auto",
+        default="mlx",
         choices=["auto", "apple", "mlx"],
         help=(
-            "Language model backend: auto (default) uses Apple Foundation Models on "
-            "macOS 27+ Golden Gate when available, otherwise MLX; apple forces "
+            "Language model backend: mlx (default) uses the local GPT OSS model; auto "
+            "uses Apple Foundation Models on macOS 27+ Golden Gate when available, "
+            "otherwise MLX; apple forces "
             "SystemLanguageModel; mlx forces the Hugging Face MLX model"
         ),
     )

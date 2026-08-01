@@ -74,7 +74,7 @@ def test_parse_tool_call_none_for_prose():
 
 
 def test_app_config_llm_provider_default():
-    assert AppConfig().llm_provider == "auto"
+    assert AppConfig().llm_provider == "mlx"
 
 
 def test_compose_prompt_includes_history():

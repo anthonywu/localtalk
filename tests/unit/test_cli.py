@@ -21,6 +21,7 @@ class TestParseArgs:
         with patch("sys.argv", ["localtalk"]):
             args = parse_args()
         assert args.model == "mlx-community/gpt-oss-20b-MXFP4-Q8"
+        assert args.llm_provider == "mlx"
         assert args.whisper_model == "turbo"
         assert args.temperature == 0.7
         assert args.top_p == 1.0
