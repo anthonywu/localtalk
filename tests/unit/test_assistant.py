@@ -244,18 +244,21 @@ class TestSttTtsModelHotSwap:
         ctor.assert_called_once()
 
     def test_set_tts_backend_loads_macos_tingting(self):
+        # The tool-facing token stays "macos_tingting", but it now routes to
+        # the modern AVSpeechSynthesizer backend (in-process PCM) rather than
+        # the legacy say subprocess; macos_say remains selectable via config.
         assistant = _make_assistant_stub()
         assistant.tts = MagicMock()
         new_tts = MagicMock()
         with patch(
-            "localtalk.services.macos_say_tts.MacOSSayTextToSpeechService",
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
             return_value=new_tts,
         ) as ctor:
             result = assistant._tool_set_tts_backend("macos_tingting")
         assert result["ok"] is True
         assert result["backend"] == "macos_tingting"
         assert assistant.tts is new_tts
-        assert assistant.config.tts_backend == "macos_say"
+        assert assistant.config.tts_backend == "apple_speech"
         assert assistant.config.whisper.language == "zh"
         assert assistant.config.response_language == "Simplified Chinese"
         ctor.assert_called_once()

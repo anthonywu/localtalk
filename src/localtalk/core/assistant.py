@@ -348,20 +348,28 @@ class VoiceAssistant:
             # Text-to-speech setup based on backend
             self.tts = None
 
-            if self.config.tts_backend in {"chatterbox", "qwen_chinese", "macos_say"}:
+            if self.config.tts_backend in {"chatterbox", "qwen_chinese", "macos_say", "apple_speech"}:
                 try:
                     self.tts = self._load_tts_service(quiet_console)
                     labels = {
                         "chatterbox": "ChatterBox TTS (MLX)",
                         "qwen_chinese": "Qwen3-TTS Chinese (MLX)",
                         "macos_say": f"macOS say ({self.config.macos_say.voice})",
+                        "apple_speech": (
+                            f"Apple speech ({self.config.apple_speech.voice_identifier.rsplit('.', 1)[-1]})"
+                        ),
                     }
                     init_messages.append(f"🗣️ {labels[self.config.tts_backend]} enabled")
                     live.update(create_panel())
                 except ImportError as e:
-                    self.console.print(f"[red]❌ ChatterBox TTS import failed: {e}")
+                    self.console.print(f"[red]❌ TTS import failed: {e}")
                     self.console.print("[red]Cannot continue without requested TTS backend.")
-                    self.console.print("[yellow]Try running: uv pip install mlx-audio")
+                    hint = (
+                        "uv pip install pyobjc-framework-AVFoundation"
+                        if self.config.tts_backend == "apple_speech"
+                        else "uv pip install mlx-audio"
+                    )
+                    self.console.print(f"[yellow]Try running: {hint}")
                     raise SystemExit(1)  # noqa: B904
 
             if self.config.tts_backend == "none":
@@ -476,6 +484,10 @@ class VoiceAssistant:
             from localtalk.services.macos_say_tts import MacOSSayTextToSpeechService
 
             return MacOSSayTextToSpeechService(self.config.macos_say, console)
+        if self.config.tts_backend == "apple_speech":
+            from localtalk.services.apple_speech_tts import AppleSpeechTextToSpeechService
+
+            return AppleSpeechTextToSpeechService(self.config.apple_speech, console)
         if self.config.tts_backend == "chatterbox":
             from localtalk.services.mlx_tts import MLXTextToSpeechService
 
@@ -487,6 +499,8 @@ class VoiceAssistant:
             return self.config.qwen_tts.model_id
         if self.config.tts_backend == "macos_say":
             return f"macOS say: {self.config.macos_say.voice}"
+        if self.config.tts_backend == "apple_speech":
+            return f"Apple speech: {self.config.apple_speech.voice_identifier}"
         return self.config.chatterbox.model_id
 
     def _tts_silence_between_pieces_ms(self) -> int:
@@ -494,6 +508,8 @@ class VoiceAssistant:
             return self.config.qwen_tts.silence_between_pieces_ms
         if self.config.tts_backend == "macos_say":
             return self.config.macos_say.silence_between_pieces_ms
+        if self.config.tts_backend == "apple_speech":
+            return self.config.apple_speech.silence_between_pieces_ms
         return self.config.chatterbox.silence_between_pieces_ms
 
     def _set_session_language(self, language: str) -> None:
@@ -615,9 +631,12 @@ class VoiceAssistant:
         target = {
             "qwen_chinese": "qwen_chinese",
             # The tool-facing name is the voice; config keeps the backend name.
-            "macos_tingting": "macos_say",
+            # Tingting now resolves to the modern AVSpeechSynthesizer backend
+            # (in-process PCM, enhanced/eloquence voices); macos_say stays
+            # selectable via config as the legacy say-subprocess fallback.
+            "macos_tingting": "apple_speech",
         }.get(backend, "chatterbox")
-        is_chinese = target in {"qwen_chinese", "macos_say"}
+        is_chinese = target in {"qwen_chinese", "apple_speech"}
         stt_language = "zh" if is_chinese else "en"
         if is_chinese and self.config.whisper.model_size.endswith(".en"):
             # English-only Whisper checkpoints cannot transcribe Chinese; fail
