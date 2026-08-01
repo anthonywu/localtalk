@@ -99,6 +99,59 @@ class TestRecordAudioConversion:
         np.testing.assert_allclose(result, expected, atol=1e-6)
         assert result.dtype == np.float32
 
+    def test_empty_recording_returns_empty_float32(self, fake_sd):
+        """A stream that delivers no frames produces a safe empty recording."""
+        service = _make_audio_service(fake_sd)
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        fake_sd.RawInputStream = FakeStream
+
+        import threading
+
+        stop_event = threading.Event()
+        stop_event.set()
+        result = service.record_audio(stop_event)
+
+        assert result.dtype == np.float32
+        assert result.size == 0
+
+    def test_recording_configures_raw_int16_mono_stream(self, fake_sd):
+        """Recording preserves the configured PortAudio input parameters."""
+        service = _make_audio_service(fake_sd)
+        captured = {}
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        fake_sd.RawInputStream = FakeStream
+
+        import threading
+
+        stop_event = threading.Event()
+        stop_event.set()
+        service.record_audio(stop_event)
+
+        assert captured["samplerate"] == service.config.sample_rate
+        assert captured["channels"] == service.config.channels
+        assert captured["dtype"] == "int16"
+        assert captured["blocksize"] == service.config.chunk_size
+
 
 # ────────────────────────── play_audio ──────────────────────────
 
@@ -224,6 +277,45 @@ class TestPlayAudio:
         service.play_audio(audio, sample_rate=16000)
         fake_sd.play.assert_called_once()
         assert fake_sd.wait.call_count >= 1
+
+    def test_interrupt_stops_playback_without_waiting(self, fake_sd):
+        """An interruption stops PortAudio and reports incomplete playback."""
+        service = _make_audio_service(fake_sd)
+        audio = np.ones(16000, dtype=np.float32) * 0.2
+
+        completed = service.play_audio(
+            audio,
+            sample_rate=16000,
+            fade_ms=0.0,
+            show_waveform=False,
+            interrupt_check=lambda: True,
+        )
+
+        assert completed is False
+        fake_sd.play.assert_called_once()
+        fake_sd.stop.assert_called_once()
+        fake_sd.wait.assert_not_called()
+
+
+class TestEarcons:
+    def test_known_earcon_plays_float_audio(self, fake_sd):
+        service = _make_audio_service(fake_sd)
+
+        service.play_earcon("speak")
+
+        samples, sample_rate = fake_sd.play.call_args.args
+        assert sample_rate == 16000
+        assert samples.dtype == np.float32
+        assert samples.size > 0
+        assert np.abs(samples).max() <= 0.05
+        fake_sd.wait.assert_called_once()
+
+    def test_unknown_earcon_is_a_noop(self, fake_sd):
+        service = _make_audio_service(fake_sd)
+
+        service.play_earcon("unknown")
+
+        fake_sd.play.assert_not_called()
 
 
 # ────────────────────────── RMS silence detection ──────────────────────────
