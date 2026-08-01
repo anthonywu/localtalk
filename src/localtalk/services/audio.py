@@ -12,18 +12,13 @@ import numpy as np
 import torch
 from rich.console import Console
 from rich.live import Live
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from localtalk.models.config import AudioConfig
-from localtalk.utils.console_ui import blank_line
 from localtalk.utils.waveform import (
-    DEFAULT_LEVEL_CHUNK_SIZE,
     WAVEFORM_WIDTH,
-    compute_playback_levels,
     level_to_block,
-    render_waveform,
 )
 
 # Default edge fade for speech playback. Streaming sentence TTS restarts
@@ -389,17 +384,15 @@ class AudioService:
         sample_rate: int | None = None,
         *,
         interrupt_check=None,
-        show_waveform: bool = True,
         fade_ms: float = DEFAULT_PLAYBACK_FADE_MS,
         trail_silence_ms: float = 0.0,
     ) -> bool:
-        """Play audio array with a live scrolling waveform.
+        """Play audio array.
 
         Args:
             audio_array: Audio data as numpy array
             sample_rate: Sample rate (uses config default if not provided)
             interrupt_check: Optional callable returning True to stop playback early
-            show_waveform: When False, play without the Live waveform panel
             fade_ms: Cosine edge fade to avoid clicks on stream restarts (0 disables)
             trail_silence_ms: Zeros appended after the signal (soft gap before next play)
 
@@ -425,15 +418,11 @@ class AudioService:
         if trail_silence_ms > 0:
             audio_array = pad_trailing_silence(audio_array, sample_rate, trail_silence_ms)
 
-        if show_waveform:
-            blank_line(self.console)
-
         try:
-            return self._play_with_waveform(
+            return self._play_audio(
                 audio_array,
                 sample_rate,
                 interrupt_check=interrupt_check,
-                show_waveform=show_waveform,
             )
         except self.sd.PortAudioError as e:
             self.console.print(f"[yellow]Audio playback error: {e}")
@@ -443,11 +432,10 @@ class AudioService:
             try:
                 # Reset to default device
                 self.sd.default.reset()
-                return self._play_with_waveform(
+                return self._play_audio(
                     audio_array,
                     sample_rate,
                     interrupt_check=interrupt_check,
-                    show_waveform=show_waveform,
                 )
             except Exception as e2:
                 # Final fallback: try to find a working output device
@@ -455,107 +443,47 @@ class AudioService:
                 self._try_alternative_playback(audio_array, sample_rate)
                 return True
 
-    def _play_with_waveform(
+    def _play_audio(
         self,
         audio_array: np.ndarray,
         sample_rate: int,
         *,
         device: int | None = None,
         interrupt_check=None,
-        show_waveform: bool = True,
     ) -> bool:
-        """Play audio while animating the same Unicode waveform used for input capture.
+        """Play audio, polling an optional interrupt check until it finishes.
 
         Returns False if interrupted via ``interrupt_check``.
+
         """
         play_kwargs: dict = {}
         if device is not None:
             play_kwargs["device"] = device
 
-        levels = compute_playback_levels(audio_array, chunk_size=DEFAULT_LEVEL_CHUNK_SIZE)
         duration = float(len(audio_array)) / float(sample_rate) if sample_rate > 0 else 0.0
-
-        def create_playback_display(progress_idx: int) -> Panel:
-            # Sliding window of levels up to the current playback position
-            window_start = max(0, progress_idx - WAVEFORM_WIDTH)
-            window = levels[window_start:progress_idx]
-            current_level = window[-1][0] if window else 0.0
-
-            table = Table(show_header=False, box=None, padding=0)
-            table.add_row("[bold cyan]🔊 Playing audio...[/bold cyan] [dim](Esc to stop)[/dim]")
-
-            waveform = render_waveform(window)
-            waveform_row = Text()
-            waveform_row.append("    ")
-            waveform_row.append_text(waveform)
-            table.add_row(waveform_row)
-
-            level_indicator = "●" if current_level > 0.02 else "○"
-            level_color = "green" if current_level > 0.02 else "dim"
-            elapsed = min(duration, progress_idx * DEFAULT_LEVEL_CHUNK_SIZE / sample_rate) if sample_rate else 0.0
-            table.add_row(
-                f"    [{level_color}]{level_indicator}[/{level_color}] "
-                f"Level: {current_level:.3f}  {elapsed:.1f}s / {duration:.1f}s",
-            )
-            return Panel(table, title="🔊 Playback", border_style="cyan", expand=False)
 
         self.sd.play(audio_array, sample_rate, **play_kwargs)
 
-        # No samples / zero duration: just wait for the device buffer to drain.
-        if not levels or duration <= 0:
+        # No duration: just wait for the device buffer to drain.
+        if duration <= 0:
             self.sd.wait()
             return True
-
-        sys.stdout.flush()
-        sys.stderr.flush()
 
         start = time.monotonic()
         interrupted = False
 
-        if not show_waveform:
-            while True:
-                if interrupt_check is not None and interrupt_check():
-                    interrupted = True
-                    self.stop_playback()
-                    break
-                elapsed = time.monotonic() - start
-                if elapsed >= duration:
-                    break
-                time.sleep(0.05)
-            if not interrupted:
-                self.sd.wait()
-            return not interrupted
-
-        with Live(
-            create_playback_display(1),
-            refresh_per_second=15,
-            console=self.console,
-            transient=True,
-        ) as live:
-            while True:
-                if interrupt_check is not None and interrupt_check():
-                    interrupted = True
-                    self.stop_playback()
-                    break
-                elapsed = time.monotonic() - start
-                if elapsed >= duration:
-                    break
-                progress_idx = min(
-                    len(levels),
-                    max(1, int(elapsed * sample_rate / DEFAULT_LEVEL_CHUNK_SIZE) + 1),
-                )
-                live.update(create_playback_display(progress_idx))
-                time.sleep(0.05)
-
-            if not interrupted:
-                # Final full-window frame
-                live.update(create_playback_display(len(levels)))
+        while True:
+            if interrupt_check is not None and interrupt_check():
+                interrupted = True
+                self.stop_playback()
+                break
+            if time.monotonic() - start >= duration:
+                break
+            time.sleep(0.05)
 
         # Drain any remaining buffer (timing vs device clock can drift slightly)
         if not interrupted:
             self.sd.wait()
-        sys.stdout.flush()
-        sys.stderr.flush()
         return not interrupted
 
     def _try_alternative_playback(self, audio_array: np.ndarray, sample_rate: int):
@@ -568,7 +496,7 @@ class AudioService:
             for device_id in output_devices:
                 try:
                     self.console.print(f"[yellow]Trying device {device_id}: {devices[device_id]['name']}")
-                    self._play_with_waveform(audio_array, sample_rate, device=device_id)
+                    self._play_audio(audio_array, sample_rate, device=device_id)
                     self.console.print("[green]Audio playback successful!")
                     # Set as default for future playback
                     self.sd.default.device[1] = device_id

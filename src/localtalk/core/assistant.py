@@ -1014,14 +1014,10 @@ class VoiceAssistant:
             play_start = time.perf_counter()
             # Edge fades + inter-sentence silence: 0.7 streaming TTS restarts
             # PortAudio per sentence (unlike pre-0.7 single long-form play).
-            # Keep Rich's live playback waveform off for now: its frequent terminal
-            # redraws cause audible crackling on the MacBook Pro speakers. Re-enable
-            # it once rendering is decoupled from the real-time playback path.
             finished = self.audio.play_audio(
                 audio_array,
                 sample_rate,
                 interrupt_check=self._playback_stop.is_set,
-                show_waveform=False,
                 trail_silence_ms=float(self._tts_silence_between_pieces_ms()),
             )
             metrics["play_ms"] = float(metrics.get("play_ms") or 0.0) + (time.perf_counter() - play_start) * 1000.0

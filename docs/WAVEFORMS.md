@@ -2,13 +2,17 @@
 
 This document describes how the LocalTalk terminal app visualizes audio waveforms in real time.
 
-There are **three waveform implementations**, all using the same core technique (Unicode block characters + Rich `Live` display) but serving different purposes:
+There are **two waveform implementations**, both using the same core technique (Unicode block characters + Rich `Live` display) but serving different purposes:
 
 | Implementation | File | Purpose | Triggered by |
 |---|---|---|---|
 | VAD recording waveform | `src/localtalk/services/audio_vad_auto.py` | Live audio + VAD status during speech capture | `record_with_vad_auto()` → `record_with_vad_automatic()` |
 | Microphone-test waveform | `src/localtalk/services/audio.py` (`test_microphone`) | Diagnostic level metering | CLI `--test-mic` flag |
-| Playback waveform | `src/localtalk/services/audio.py` (`play_audio` / `_play_with_waveform`) | Live level animation while TTS/audio plays | Assistant reply playback |
+
+> **Note:** A playback waveform previously animated output levels during TTS, but its
+> real-time terminal redraws caused audible crackling on the speakers, so it was removed.
+> `AudioService.play_audio()` now plays without a live panel (it still polls an interrupt
+> check and drains the device buffer).
 
 ---
 
@@ -239,23 +243,6 @@ Followed by a diagnosis:
 - Peak `< 0.01` → ❌ no audio (with troubleshooting tips)
 - Peak `< 0.05` → ⚠️ very low levels (with suggestions)
 - Peak `≥ 0.05` → ✓ working properly
-
----
-
-## Implementation 3: Playback Waveform
-
-**File:** `src/localtalk/services/audio.py`
-**Functions:** `AudioService.play_audio()` → `_play_with_waveform()`
-**Helpers:** `compute_playback_levels()` + `render_waveform()` in `src/localtalk/utils/waveform.py`
-
-Unlike capture, the full PCM buffer is known up front. Levels are precomputed per 512-sample chunk, then a Rich `Live` panel advances a sliding window in wall-clock sync with `sounddevice` playback:
-
-- Status: `🔊 Playing audio...` inside a cyan `🔊 Playback` panel (mirrors the VAD input panel)
-- Waveform: same `render_waveform` coloring (green = active audio, yellow/dim = quiet)
-- Info row: current level + elapsed / total duration
-- `transient=True` — cleared after playback finishes
-
-Fallback device selection reuses `_play_with_waveform` so the animation still appears when the default output fails.
 
 ---
 

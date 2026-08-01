@@ -271,7 +271,7 @@ class TestPlayAudio:
     def test_play_calls_wait(self, fake_sd):
         """Successful playback drains the stream via wait()."""
         service = _make_audio_service(fake_sd)
-        # Long enough for the Live loop to take at least one tick path
+        # Long enough for the polling loop to take at least one tick path
         audio = np.zeros(512, dtype=np.float32)
         audio[0] = 0.5
         service.play_audio(audio, sample_rate=16000)
@@ -287,7 +287,6 @@ class TestPlayAudio:
             audio,
             sample_rate=16000,
             fade_ms=0.0,
-            show_waveform=False,
             interrupt_check=lambda: True,
         )
 
