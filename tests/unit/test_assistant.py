@@ -335,6 +335,17 @@ class TestSttTtsModelHotSwap:
         result = assistant._tool_set_tts_backend("chatterbox_turbo")
         assert result["ok"] is True
 
+    def test_chinese_directive_includes_tts_readiness_guidance(self):
+        """The Chinese session directive must coach the model toward output
+        that streams and speaks well: full-width punctuation, spoken-form
+        numbers, no Markdown."""
+        assistant = _make_assistant_stub()
+        assistant._set_session_language("Simplified Chinese")
+        prompt = assistant.config.system_prompt
+        assert "Simplified Chinese" in prompt
+        assert "。！？" in prompt
+        assert "百分之五十" in prompt
+
 
 # ────────────────────── _handle_direct_tts_backend_command ──────────────────────
 

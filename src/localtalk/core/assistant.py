@@ -500,7 +500,11 @@ class VoiceAssistant:
         """Update the active LLM instruction after an input/output language switch."""
         directive = (
             "\n\nFor this session, respond only in Simplified Chinese. Preserve Chinese user input; "
-            "do not translate it into English unless the user explicitly requests a translation."
+            "do not translate it into English unless the user explicitly requests a translation. "
+            "Your replies are read aloud by Chinese text-to-speech: end sentences with full-width "
+            "punctuation (。！？) so it can split them for streaming, write numbers, units, and "
+            "abbreviations in their spoken Chinese form (for example 百分之五十 instead of 50%), "
+            "and avoid Markdown formatting and unnecessary English words."
             if language == "Simplified Chinese"
             else "\n\nFor this session, respond only in English unless the user explicitly requests another language."
         )
