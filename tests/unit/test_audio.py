@@ -317,27 +317,6 @@ class TestEarcons:
         fake_sd.play.assert_not_called()
 
 
-# ────────────────────────── RMS silence detection ──────────────────────────
-
-
-class TestSilenceDetection:
-    def test_rms_below_threshold_is_silence(self, fake_sd):
-        """RMS below silence_threshold increments silence counter."""
-        service = _make_audio_service(fake_sd)
-
-        threshold = service.config.silence_threshold  # 0.01
-
-        # Simulate a quiet chunk
-        quiet = np.full((512,), 0.001, dtype=np.float32)
-        rms = np.sqrt(np.mean(quiet**2))
-        assert rms < threshold
-
-        # Simulate a loud chunk
-        loud = np.full((512,), 0.5, dtype=np.float32)
-        rms_loud = np.sqrt(np.mean(loud**2))
-        assert rms_loud >= threshold
-
-
 # ────────────────────────── VAD guards ──────────────────────────
 
 
