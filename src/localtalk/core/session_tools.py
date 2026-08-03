@@ -364,6 +364,27 @@ class SessionTools:
                 "error": f"model must be one of: {', '.join(WHISPER_MODEL_SIZES)}",
             }
 
+        # Symmetric guard to set_tts_backend: English-only Whisper cannot
+        # serve a Chinese voice session (or an explicit zh STT language).
+        effective_lang = (
+            language.strip() if language is not None and language.strip() else assistant.config.whisper.language
+        )
+        chinese_session = (
+            assistant.config.tts_backend in {"qwen_chinese", "apple_speech"}
+            or assistant.config.response_language == "Simplified Chinese"
+            or effective_lang == "zh"
+        )
+        if model.endswith(".en") and chinese_session:
+            multilingual = model[: -len(".en")]
+            return {
+                "ok": False,
+                "error": (
+                    f"Whisper model {model!r} is English-only and cannot transcribe Chinese. "
+                    f"Stay on a multilingual size (e.g. {multilingual!r}) while the session "
+                    f"is in Chinese, or switch to an English voice first."
+                ),
+            }
+
         same_model = model == assistant.config.whisper.model_size
         same_lang = language is None or language == assistant.config.whisper.language
         if same_model and same_lang and getattr(assistant, "stt", None) is not None:

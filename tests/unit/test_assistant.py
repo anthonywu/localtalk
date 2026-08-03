@@ -225,6 +225,19 @@ class TestSttTtsModelHotSwap:
         result = assistant._tool_set_stt_model("not-a-model")
         assert result["ok"] is False
 
+    def test_set_stt_model_rejects_en_only_during_chinese_session(self):
+        """English-only Whisper must not load while the session is Chinese."""
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.config.whisper.model_size = "turbo"
+        assistant.config.whisper.language = "zh"
+        assistant.config.tts_backend = "apple_speech"
+        assistant.config.response_language = "Simplified Chinese"
+        result = assistant._tool_set_stt_model("small.en")
+        assert result["ok"] is False
+        assert "English-only" in result["error"]
+        assert assistant.config.whisper.model_size == "turbo"
+
     def test_set_tts_model_reloads(self):
         assistant = _make_assistant_stub()
         assistant.tts = MagicMock()
