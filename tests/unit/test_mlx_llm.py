@@ -276,20 +276,31 @@ class TestGenerateResponse:
         assert history[-1].content == "newest"
         assert history[-2].content == "hello"
 
-    def test_audio_cleanup_after_generation(self, mock_parser):
+    def test_audio_cleanup_after_generation(self, mock_parser, monkeypatch, tmp_path):
         service = self._make_service()
         audio = np.array([0.1, -0.1, 0.5], dtype=np.float32)
+        temp_file = tmp_path / "speech.wav"
+        unlinked: list[str] = []
+
+        def fake_save(audio_array, sample_rate):
+            temp_file.write_bytes(b"RIFF")
+            return str(temp_file)
+
+        monkeypatch.setattr(service, "_save_audio_to_temp_file", fake_save)
+        monkeypatch.setattr(
+            "localtalk.services.mlx_llm.Path.unlink",
+            lambda self, *a, **kw: unlinked.append(str(self)),
+        )
 
         service.generate_response("hello", audio_array=audio, sample_rate=16000)
-        # Temp file should be cleaned up — we can't easily check the exact path
-        # but verify no error was raised (the cleanup code runs)
+        assert unlinked == [str(temp_file)]
 
     def test_debug_mode(self, mock_parser, monkeypatch):
         service = self._make_service()
         monkeypatch.setenv("LOCALTALK_DEBUG", "1")
         # Should not raise in debug mode
         result = service.generate_response("hello")
-        assert isinstance(result, str)
+        assert result == "I'm sorry, I couldn't produce a response."
 
     def test_clear_history_after_generate(self, mock_parser):
         from openai_harmony import Message, Role
