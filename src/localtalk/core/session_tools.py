@@ -443,31 +443,35 @@ class SessionTools:
     ) -> dict:
         assistant = self.assistant
         mode = mode.lower().strip()
+        if mode not in {"auto", "manual", "off"}:
+            return {"ok": False, "error": "mode must be auto, manual, or off"}
+        if threshold is not None and not 0.0 <= threshold <= 1.0:
+            return {"ok": False, "error": "threshold must be between 0 and 1"}
+        if min_speech_ms is not None and min_speech_ms < 0:
+            return {"ok": False, "error": "min_speech_ms must be >= 0"}
+
+        # Snapshot so validation failure never leaves a half-applied mode.
+        prev = assistant.config.audio.model_copy(deep=True)
         if mode == "auto":
             assistant.config.audio.use_vad = True
             assistant.config.audio.vad_auto_start = True
         elif mode == "manual":
             assistant.config.audio.use_vad = True
             assistant.config.audio.vad_auto_start = False
-        elif mode == "off":
+        else:  # off
             assistant.config.audio.use_vad = False
             assistant.config.audio.vad_auto_start = False
-        else:
-            return {"ok": False, "error": "mode must be auto, manual, or off"}
 
         if threshold is not None:
-            if not 0.0 <= threshold <= 1.0:
-                return {"ok": False, "error": "threshold must be between 0 and 1"}
             assistant.config.audio.vad_threshold = threshold
         if min_speech_ms is not None:
-            if min_speech_ms < 0:
-                return {"ok": False, "error": "min_speech_ms must be >= 0"}
             assistant.config.audio.vad_min_speech_duration_ms = min_speech_ms
 
         # Re-validate Silero constraints when auto VAD is on
         try:
             assistant.config.audio = assistant.config.audio.model_validate(assistant.config.audio.model_dump())
         except Exception as exc:
+            assistant.config.audio = prev
             return {"ok": False, "error": str(exc)}
 
         assistant.console.print(

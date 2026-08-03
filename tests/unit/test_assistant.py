@@ -238,6 +238,27 @@ class TestSttTtsModelHotSwap:
         assert "English-only" in result["error"]
         assert assistant.config.whisper.model_size == "turbo"
 
+    def test_set_vad_mode_rejects_bad_threshold_without_mutating(self):
+        assistant = _make_assistant_stub()
+        assistant.config.audio.use_vad = True
+        assistant.config.audio.vad_auto_start = True
+        result = assistant._tool_set_vad_mode("manual", threshold=1.5)
+        assert result["ok"] is False
+        assert assistant.config.audio.vad_auto_start is True  # still auto
+        assert assistant.config.audio.use_vad is True
+
+    def test_set_vad_mode_rolls_back_on_silero_validation_failure(self):
+        assistant = _make_assistant_stub()
+        # Auto VAD requires sample_rate=16000; break it then request auto.
+        assistant.config.audio.use_vad = False
+        assistant.config.audio.vad_auto_start = False
+        assistant.config.audio.sample_rate = 44100
+        result = assistant._tool_set_vad_mode("auto")
+        assert result["ok"] is False
+        assert assistant.config.audio.use_vad is False
+        assert assistant.config.audio.vad_auto_start is False
+        assert assistant.config.audio.sample_rate == 44100
+
     def test_set_tts_model_reloads(self):
         assistant = _make_assistant_stub()
         assistant.tts = MagicMock()
