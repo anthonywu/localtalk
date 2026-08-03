@@ -434,6 +434,12 @@ MIT License - see LICENSE file for details.
 - OpenAI gpt-oss and the `openai-harmony` library for the gpt-oss adapter's reasoning and tool-calling protocol
 - Resemble AI for ChatterBox TTS
 
+## AI Usage Disclosure
+
+This project was built with substantial assistance from AI coding models and agent harnesses. Both closed and open-weight models were used, including OpenAI GPT, Anthropic Claude, Moonshot Kimi, Z.ai GLM, and SpaceXAI Grok, across multiple harnesses such as Codex, Claude Code, OpenCode, Grok Build, and pi.
+
+Humans remain responsible for design decisions, review, and the final state of the code. AI was used as a force multiplier for implementation, refactoring, tests, and documentation — not as a substitute for engineering judgment.
+
 ## Future Plans & Roadmap
 
 ### Language Support
