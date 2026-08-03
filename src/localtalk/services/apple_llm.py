@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import json
 import re
-from collections.abc import Callable
 from typing import Any
 
 from rich.console import Console
@@ -25,30 +24,12 @@ from localtalk.services.foundation_models_helper import (
     is_golden_gate_or_newer,
     probe_foundation_models_status,
 )
-from localtalk.services.tools.base import ToolRegistry
-from localtalk.services.tools.browser import make_browser_tools
-from localtalk.services.tools.knowledge import make_acquire_knowledge_tool, make_query_knowledge_tool
-from localtalk.services.tools.online import ConnectivityCache, make_check_online_tool
-from localtalk.services.tools.reasoning import make_reasoning_tool, reasoning_effort_for
-from localtalk.services.tools.settings import (
-    make_set_browser_engine_tool,
-    make_set_browser_headed_tool,
-    make_set_generation_tool,
-    make_set_show_reasoning_tool,
-    make_set_stats_tool,
-    make_set_stt_model_tool,
-    make_set_tts_backend_tool,
-    make_set_tts_model_tool,
-    make_set_tts_tool,
-    make_set_vad_mode_tool,
-    make_voice_help_tool,
-)
-from localtalk.services.tools.web import make_web_search_tool
-from localtalk.services.tools.web_toggle import make_set_web_tools_tool
+from localtalk.services.llm_protocol import ProviderToolingMixin, SpokenSentenceSink
+from localtalk.services.tools.online import ConnectivityCache
+from localtalk.services.tools.prompts import tool_policy_addendum
+from localtalk.services.tools.reasoning import reasoning_effort_for
 from localtalk.utils.console_ui import print_assistant_utterance
 from localtalk.utils.text_processing import take_complete_sentences
-
-SpokenSentenceSink = Callable[[str], None]
 
 # Cap re-prompts when the model emits tool-shaped garbage. Separate from real
 # tool-dispatch rounds so one bad format cannot burn the whole tool budget.
@@ -70,17 +51,13 @@ Examples:
 Do not use single quotes. Do not put trailing commas. Do not wrap in markdown.
 arguments must be a JSON object (not a string). Use double quotes for all keys/strings.
 
-When a user's clear request maps to an available tool, invoke the tool directly.
-Do not ask for approval, offer to do it, or wait for confirmation. Ask only when a
-required target or parameter is missing, or when the action is inherently consequential.
-
 When you can answer the user, reply in plain speakable text (no markdown, no JSON).
 Spell out abbreviations and numbers for text-to-speech. Keep answers concise.
 Never invent tool results — call tools instead.
 """
 
 
-class AppleFoundationModelService:
+class AppleFoundationModelService(ProviderToolingMixin):
     """On-device Apple Intelligence language model via Foundation Models framework."""
 
     provider_id = "apple"
@@ -149,146 +126,30 @@ class AppleFoundationModelService:
             self._process.close()
             self._process = None
 
-    def bind_session_control(self, control: dict) -> None:
-        self.session_control = control
-        self.tool_registry = self._build_tool_registry()
-        # Tool list is part of instructions — refresh session instructions.
+    def _after_session_control_bound(self) -> None:
+        # Tool list is part of FM session instructions — refresh after rebinding.
         try:
             self._reset_session()
         except Exception as exc:
             self.console.print(f"[yellow]Warning: could not refresh FM session: {exc}[/yellow]")
 
-    # ── tools / browser (shared with MLX service) ──────────────────────
-
-    def _sync_browser_session_to_web_flag(self) -> None:
-        self.browser_tools.enabled = self.web_tools.enabled
-        if self.web_tools.enabled:
-            if self.browser_session is None:
-                self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
-        elif self.browser_session is not None:
-            self.browser_session.close()
-            self.browser_session = None
-
-    def set_web_tools_enabled(self, enabled: bool) -> dict:
-        self.web_tools.enabled = bool(enabled)
-        self._sync_browser_session_to_web_flag()
-        self.tool_registry = self._build_tool_registry()
+    def _after_web_tools_toggled(self) -> None:
         try:
             self._reset_session()
         except Exception:
             pass
-        state = "on" if self.web_tools.enabled else "off"
-        self.console.print(f"[cyan]Online tools set to: {state}[/cyan]")
-        return {"ok": True, "web_tools_enabled": self.web_tools.enabled}
 
-    def set_show_reasoning(self, enabled: bool) -> dict:
-        self.config.show_reasoning = bool(enabled)
-        self.console.print(f"[cyan]Show reasoning set to: {self.config.show_reasoning}[/cyan]")
-        return {"ok": True, "show_reasoning": self.config.show_reasoning}
+    # ── tools / browser ────────────────────────────────────────────────
 
-    def set_browser_engine(self, engine: str) -> dict:
-        engine = engine.lower().strip()
-        if engine not in {"chrome", "safari"}:
-            return {"ok": False, "error": "engine must be chrome or safari"}
-        self.browser_tools.engine = engine  # type: ignore[assignment]
-        if self.browser_session is not None:
-            self.browser_session.close()
-            self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
-            self.tool_registry = self._build_tool_registry()
-        self.console.print(f"[cyan]Browser engine set to: {engine}[/cyan]")
-        return {"ok": True, "engine": engine}
-
-    def set_browser_headed(self, headed: bool) -> dict:
-        self.browser_tools.headed = bool(headed)
-        if self.browser_session is not None:
-            self.browser_session.close()
-            self.browser_session = BrowserSession(self.browser_tools, console_print=self.console.print)
-            self.tool_registry = self._build_tool_registry()
-        self.console.print(f"[cyan]Browser headed set to: {self.browser_tools.headed}[/cyan]")
-        return {"ok": True, "headed": self.browser_tools.headed}
-
-    def set_generation(
-        self,
-        *,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-    ) -> dict:
-        if temperature is not None:
-            if not 0.0 <= temperature <= 2.0:
-                return {"ok": False, "error": "temperature must be between 0 and 2"}
-            self.config.temperature = temperature
-        if top_p is not None:
-            if not 0.0 <= top_p <= 1.0:
-                return {"ok": False, "error": "top_p must be between 0 and 1"}
-            self.config.top_p = top_p
-        if max_tokens is not None:
-            if max_tokens < 1:
-                return {"ok": False, "error": "max_tokens must be >= 1"}
-            self.config.max_tokens = max_tokens
-        self.console.print(
-            f"[cyan]Generation: temperature={self.config.temperature}, "
-            f"top_p={self.config.top_p}, max_tokens={self.config.max_tokens}[/cyan]"
-        )
+    def set_reasoning_effort(self, level: str) -> dict:
+        self.reasoning_effort = reasoning_effort_for(ReasoningLevel(level))
+        self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
+        # FM has no Harmony reasoning channel — note for the user.
         return {
             "ok": True,
-            "temperature": self.config.temperature,
-            "top_p": self.config.top_p,
-            "max_tokens": self.config.max_tokens,
+            "reasoning_effort": level,
+            "note": "Apple Foundation Models has no multi-tier reasoning knob; preference recorded for session.",
         }
-
-    def _build_tool_registry(self) -> ToolRegistry:
-        registry = ToolRegistry()
-
-        def set_effort(level: str) -> dict:
-            self.reasoning_effort = reasoning_effort_for(ReasoningLevel(level))
-            self.console.print(f"[cyan]Reasoning effort set to: {level}[/cyan]")
-            # FM has no Harmony reasoning channel — note for the user.
-            return {
-                "ok": True,
-                "reasoning_effort": level,
-                "note": "Apple Foundation Models has no multi-tier reasoning knob; preference recorded for session.",
-            }
-
-        registry.register(make_reasoning_tool(set_effort))
-        registry.register(make_set_web_tools_tool(self.set_web_tools_enabled))
-        registry.register(make_set_show_reasoning_tool(self.set_show_reasoning))
-        registry.register(make_set_browser_engine_tool(self.set_browser_engine))
-        registry.register(make_set_browser_headed_tool(self.set_browser_headed))
-        registry.register(make_set_generation_tool(self.set_generation))
-
-        if (set_stats := self.session_control.get("set_stats")) is not None:
-            registry.register(make_set_stats_tool(set_stats))
-        if (set_tts := self.session_control.get("set_tts")) is not None:
-            registry.register(make_set_tts_tool(set_tts))
-        if (set_tts_model := self.session_control.get("set_tts_model")) is not None:
-            registry.register(make_set_tts_model_tool(set_tts_model))
-        if (set_tts_backend := self.session_control.get("set_tts_backend")) is not None:
-            registry.register(make_set_tts_backend_tool(set_tts_backend))
-        if (set_stt_model := self.session_control.get("set_stt_model")) is not None:
-            registry.register(make_set_stt_model_tool(set_stt_model))
-        if (set_vad := self.session_control.get("set_vad_mode")) is not None:
-            registry.register(make_set_vad_mode_tool(set_vad))
-        if (voice_help := self.session_control.get("voice_help")) is not None:
-            registry.register(make_voice_help_tool(voice_help))
-
-        registry.register(make_acquire_knowledge_tool(self.knowledge_store, self.console.print))
-        registry.register(make_query_knowledge_tool(self.knowledge_query, self.console.print))
-        registry.register(make_check_online_tool(self.connectivity_cache))
-        if self.web_tools.enabled:
-            registry.register(
-                make_web_search_tool(
-                    self.connectivity_cache,
-                    max_results_default=self.web_tools.search_max_results,
-                    timeout_s=self.web_tools.search_timeout_s,
-                    console_print=self.console.print,
-                    browser_session_getter=lambda: self.browser_session,
-                )
-            )
-            if self.browser_session is not None:
-                for spec in make_browser_tools(self.browser_session):
-                    registry.register(spec)
-        return registry
 
     def _tool_catalog_text(self) -> str:
         lines = ["Available tools:"]
@@ -303,19 +164,9 @@ class AppleFoundationModelService:
         base = self.system_prompt.strip()
         base += _TOOL_PROTOCOL
         base += "\n" + self._tool_catalog_text()
-        if self.web_tools.enabled:
-            base += (
-                "\nOnline tools are ON. Look up live facts with web_search when needed. Do not refuse ordinary lookups. "
-                "A request to look something up, search, check, find, or get current information is authorization "
-                "to call web_search immediately; never ask whether to search or wait for confirmation."
-            )
-        else:
-            base += (
-                "\nOnline tools are OFF. Prefer query_knowledge / acquire_knowledge, "
-                "or set_web_tools to enable web when the user needs live data. A direct request to look something "
-                "up, search, check, find, or get current information is authorization to enable web and search; "
-                "never ask for confirmation first."
-            )
+        # Same usage policy as the MLX/Harmony path — only the tool-call
+        # *encoding* above is provider-specific.
+        base += tool_policy_addendum(web_enabled=self.web_tools.enabled)
         return base
 
     def _max_tool_rounds(self) -> int:

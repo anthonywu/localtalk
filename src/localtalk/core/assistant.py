@@ -1,17 +1,11 @@
 """Main voice assistant implementation."""
 
 import re
-import select
 import signal
-import sys
-import termios
 import threading
 import time
-import tty
 from datetime import datetime
 
-import mistune
-from mistune.renderers.html import HTMLRenderer
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -19,6 +13,12 @@ from rich.panel import Panel
 # Apply MLX compatibility patches before importing services that use MLX. This
 # remains lazy at package import time so the CLI can handle an immediate Ctrl+C.
 import localtalk.utils.mlx_compat  # noqa: F401
+from localtalk.core.session_tools import SessionTools
+from localtalk.core.terminal import (
+    EscTerminalWatcher,
+    _input_with_escape,
+)
+from localtalk.core.turn_pipeline import TurnPipeline
 from localtalk.models.config import AppConfig
 from localtalk.services.apple_llm import resolve_llm_provider
 from localtalk.services.audio import AudioService
@@ -28,148 +28,12 @@ from localtalk.services.tools.online import (
     format_network_status_line,
     format_privacy_banner_lines,
 )
-from localtalk.utils.console_ui import print_assistant_utterance, print_user_utterance, soft_rule
+from localtalk.utils.console_ui import print_assistant_utterance, print_user_utterance
 from localtalk.utils.metrics import MetricsStore
-from localtalk.utils.text_processing import clean_text_for_tts
+from localtalk.utils.text_processing import strip_markdown as _strip_markdown
 
 # Escape character and arrow-key escape sequence prefix
 _ESC = "\x1b"
-
-
-def _stdin_has_key(timeout: float = 0.0) -> bool:
-    """Check if a key is available on stdin without blocking."""
-    return bool(select.select([sys.stdin], [], [], timeout)[0])
-
-
-def _read_key_raw() -> str:
-    """Read a single keypress from stdin in raw mode.
-
-    Caller must have already set the terminal to raw mode.
-    Handles escape sequences: standalone ESC returns _ESC,
-    arrow keys (ESC+[+X) are consumed and return "".
-    """
-    ch = sys.stdin.read(1)
-    if ch == _ESC and _stdin_has_key(timeout=0.05):
-        # Escape sequence (arrow key, etc.) — consume the rest
-        sys.stdin.read(2)  # Typically [ and one more char
-        return ""
-    return ch
-
-
-def _input_with_escape(console: Console, prompt: str) -> str | None:
-    """Read a line of text, returning None if Esc is pressed.
-
-    Uses raw terminal mode to detect the Escape key. Supports basic
-    line editing (backspace) and Ctrl+C. Arrow keys are consumed but
-    not processed (no cursor movement).
-
-    Falls back to ``console.input()`` when stdin is not a real TTY
-    (e.g. piped input, pytest capture).
-
-    Args:
-        console: Rich console for printing the prompt.
-        prompt: Rich-markup prompt string to display.
-
-    Returns:
-        The input string, None if Esc pressed, or "" if Enter pressed with no text.
-    """
-    if not sys.stdin.isatty():
-        # Fallback: no raw mode available, use standard input
-        user_input = console.input(prompt).strip()
-        return user_input if user_input else None
-
-    console.print(prompt, end="")
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    chars: list[str] = []
-
-    try:
-        tty.setraw(fd)
-        while True:
-            key = _read_key_raw()
-
-            if key == _ESC:  # Standalone Esc → go back
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                return None
-            elif key in ("\r", "\n"):  # Enter → submit
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                return "".join(chars)
-            elif key in ("\x7f", "\x08"):  # Backspace / Delete
-                if chars:
-                    chars.pop()
-                    sys.stdout.write("\b \b")
-                    sys.stdout.flush()
-            elif key == "\x03":  # Ctrl+C
-                raise KeyboardInterrupt
-            elif key == "\x15":  # Ctrl+U → clear line
-                while chars:
-                    chars.pop()
-                    sys.stdout.write("\b \b")
-                sys.stdout.flush()
-            elif key and key.isprintable():  # Printable char
-                chars.append(key)
-                sys.stdout.write(key)
-                sys.stdout.flush()
-            # Empty string = consumed escape sequence; ignore
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-
-class _PlainTextRenderer(HTMLRenderer):
-    """Renderer that strips markdown formatting, outputting plain text."""
-
-    def text(self, text):
-        return text
-
-    def emphasis(self, text):
-        return text
-
-    def strong(self, text):
-        return text
-
-    def link(self, text, **attrs):
-        return text
-
-    def image(self, text, **attrs):
-        return text or ""
-
-    def codespan(self, text):
-        return text
-
-    def linebreak(self):
-        return "\n"
-
-    def softbreak(self):
-        return " "
-
-    def paragraph(self, text):
-        return text + "\n\n"
-
-    def heading(self, text, level, **attrs):
-        return text + "\n"
-
-    def block_code(self, code, **attrs):
-        return code + "\n"
-
-    def block_quote(self, text):
-        return text
-
-    def list(self, text, ordered, **attrs):
-        return text
-
-    def list_item(self, text, **attrs):
-        return "• " + text + "\n" if text else ""
-
-    def thematic_break(self):
-        return "\n"
-
-
-def _strip_markdown(text: str) -> str:
-    """Strip markdown formatting from text, returning plain text."""
-    md = mistune.create_markdown(renderer=_PlainTextRenderer())
-    return md(text).strip()
 
 
 class VoiceAssistant:
@@ -478,350 +342,46 @@ class VoiceAssistant:
 
         self._print_privacy_banner()
 
+    # ── Mid-session service tools ─────────────────────────────────────
+    # Implemented in core.session_tools.SessionTools; these thin delegates
+    # keep the bind_session_control callback map and test surface stable.
+    # The controller only reads/writes assistant state through ``self``.
+
     def _tool_set_stats(self, enabled: bool) -> dict:
-        self.config.show_stats = bool(enabled)
-        self.console.print(f"[cyan]Timing stats set to: {self.config.show_stats}[/cyan]")
-        return {"ok": True, "show_stats": self.config.show_stats}
+        return SessionTools(self).set_stats(enabled)
 
     def _load_tts_service(self, console: Console):
-        """Construct the configured TTS service without changing session state."""
-        if self.config.tts_backend == "qwen_chinese":
-            from localtalk.services.qwen_tts import QwenTextToSpeechService
-
-            return QwenTextToSpeechService(self.config.qwen_tts, console)
-        if self.config.tts_backend == "macos_say":
-            from localtalk.services.macos_say_tts import MacOSSayTextToSpeechService
-
-            return MacOSSayTextToSpeechService(self.config.macos_say, console)
-        if self.config.tts_backend == "apple_speech":
-            from localtalk.services.apple_speech_tts import AppleSpeechTextToSpeechService
-
-            return AppleSpeechTextToSpeechService(self.config.apple_speech, console)
-        if self.config.tts_backend == "chatterbox":
-            from localtalk.services.mlx_tts import MLXTextToSpeechService
-
-            return MLXTextToSpeechService(self.config.chatterbox, console)
-        raise RuntimeError("cannot load TTS while text-only mode is active")
+        return SessionTools(self).load_tts_service(console)
 
     def _active_tts_model_id(self) -> str:
-        if self.config.tts_backend == "qwen_chinese":
-            return self.config.qwen_tts.model_id
-        if self.config.tts_backend == "macos_say":
-            return f"macOS say: {self.config.macos_say.voice}"
-        if self.config.tts_backend == "apple_speech":
-            return f"Apple speech: {self.config.apple_speech.voice_identifier}"
-        return self.config.chatterbox.model_id
+        return SessionTools(self).active_tts_model_id()
 
     def _tts_silence_between_pieces_ms(self) -> int:
-        if self.config.tts_backend == "qwen_chinese":
-            return self.config.qwen_tts.silence_between_pieces_ms
-        if self.config.tts_backend == "macos_say":
-            return self.config.macos_say.silence_between_pieces_ms
-        if self.config.tts_backend == "apple_speech":
-            return self.config.apple_speech.silence_between_pieces_ms
-        return self.config.chatterbox.silence_between_pieces_ms
+        return SessionTools(self).tts_silence_between_pieces_ms()
 
     def _best_installed_tier(self, language: str) -> str | None:
-        """Best Apple Speech quality tier installed for a language, or None.
-
-        Eloquence/character voices are skipped (novelty, not a quality upgrade).
-        Returns None if PyObjC/AVFoundation is unavailable so callers can degrade
-        gracefully instead of crashing when speech bindings are absent.
-        """
-        try:
-            from localtalk.services.apple_speech_tts import list_installed_voices
-        except RuntimeError:
-            return None
-        natural = [v for v in list_installed_voices(language) if not v.is_eloquence]
-        return max(natural, key=lambda v: v.quality).tier if natural else None
+        return SessionTools(self).best_installed_tier(language)
 
     def _tool_voice_help(self) -> dict:
-        """Single source of truth for the in-session voice-usage message.
-
-        Shared by the ``usage``/``help`` direct command and the ``voice_help``
-        LLM tool. Reports the active voice tier and how to install a higher one.
-        """
-        active_tier = getattr(self.tts, "tier", None)
-        best_installed = self._best_installed_tier(self.config.apple_speech.language)
-        chinese = self.config.response_language == "Simplified Chinese"
-
-        if chinese:
-            active = f"你正在使用 {active_tier} 级别的语音。" if active_tier else ""
-            best = (
-                f"已安装的最高级别为 {best_installed}。"
-                if best_installed in {"Enhanced", "Premium"}
-                else "目前只有默认级别的语音。"
-            )
-            msg = (
-                f"{active}{best}苹果还提供更高质量的增强版和高级版语音。"
-                "运行 localtalk --list-voices 查看可用语音，然后在「系统设置 → 辅助功能 → "
-                "朗读内容 → 系统语音」里下载。重启后我会自动使用最高级别的语音。"
-            )
-        else:
-            active = f"You're on the {active_tier}-tier voice. " if active_tier else ""
-            best = (
-                f"Your best installed voice is {best_installed}-tier. "
-                if best_installed in {"Enhanced", "Premium"}
-                else "Only Default-tier voices are installed. "
-            )
-            msg = (
-                f"{active}{best}Higher-quality Enhanced and Premium voices are available from Apple. "
-                "Run 'localtalk --list-voices' to see them, then download one in System Settings → "
-                "Accessibility → Spoken Content → System Voices. I'll auto-select the best one on restart."
-            )
-        return {
-            "ok": True,
-            "message": msg.strip(),
-            "spoken": msg.strip(),
-            "backend": self.config.tts_backend,
-            "tier": active_tier,
-            "best_installed_tier": best_installed,
-        }
+        return SessionTools(self).voice_help()
 
     def _set_session_language(self, language: str) -> None:
-        """Update the active LLM instruction after an input/output language switch."""
-        directive = (
-            "\n\nFor this session, respond only in Simplified Chinese. Preserve Chinese user input; "
-            "do not translate it into English unless the user explicitly requests a translation. "
-            "Your replies are read aloud by Chinese text-to-speech: end sentences with full-width "
-            "punctuation (。！？) so it can split them for streaming, write numbers, units, and "
-            "abbreviations in their spoken Chinese form (for example 百分之五十 instead of 50%), "
-            "and avoid Markdown formatting and unnecessary English words."
-            if language == "Simplified Chinese"
-            else "\n\nFor this session, respond only in English unless the user explicitly requests another language."
-        )
-        base_prompt = getattr(self, "_base_system_prompt", self.config.system_prompt)
-        self._base_system_prompt = base_prompt
-        self.config.response_language = language  # type: ignore[assignment]
-        self.config.system_prompt = base_prompt + directive
-        if not getattr(self, "llm", None):
-            return
-        self.llm.system_prompt = self.config.system_prompt
-        # Apple Foundation Models keeps the instructions in a persistent helper
-        # session; refresh them when the language changes between turns.
-        if getattr(self, "llm_provider", None) == "apple" and hasattr(self.llm, "_reset_session"):
-            try:
-                self.llm._reset_session()
-            except Exception as exc:
-                self.console.print(f"[yellow]Warning: could not refresh language instructions: {exc}[/yellow]")
+        SessionTools(self).set_session_language(language)
+
+    def _ensure_voice_for_text(self, text: str) -> bool:
+        return SessionTools(self).ensure_voice_for_text(text)
 
     def _tool_set_tts(self, enabled: bool) -> dict:
-        if enabled:
-            if self.tts is None:
-                if self._tts_cached is not None:
-                    self.tts = self._tts_cached
-                    self.config.tts_backend = self._tts_cached_backend
-                else:
-                    try:
-                        self.config.tts_backend = self._tts_cached_backend
-                        self.tts = self._load_tts_service(self.console)
-                    except Exception as exc:
-                        return {"ok": False, "error": f"could not enable TTS: {exc}"}
-            self.console.print("[cyan]TTS set to: on[/cyan]")
-            return {
-                "ok": True,
-                "tts_enabled": True,
-                "model_id": self._active_tts_model_id(),
-                "backend": self.config.tts_backend,
-            }
-        # Disable without unloading so re-enable is fast
-        model_id = self._active_tts_model_id()
-        self._tts_cached_backend = self.config.tts_backend
-        self.config.tts_backend = "none"
-        if self.tts is not None:
-            self._tts_cached = self.tts
-            self.tts = None
-        self.console.print("[cyan]TTS set to: off (text-only)[/cyan]")
-        return {"ok": True, "tts_enabled": False, "model_id": model_id}
+        return SessionTools(self).set_tts(enabled)
 
     def _tool_set_tts_model(self, model_id: str) -> dict:
-        """Hot-swap ChatterBox / mlx-audio TTS model mid-session."""
-        model_id = (model_id or "").strip()
-        if not model_id:
-            return {"ok": False, "error": "model_id is required"}
-        if (
-            model_id == self.config.chatterbox.model_id
-            and self.tts is not None
-            and self.config.tts_backend == "chatterbox"
-        ):
-            # Already on this ChatterBox model; still re-assert the English
-            # language pairing in case a previous Chinese session left
-            # zh state behind (Whisper input language + response directive).
-            self.config.whisper.language = "en"
-            self._set_session_language("English")
-            return {
-                "ok": True,
-                "model_id": model_id,
-                "reloaded": False,
-                "tts_enabled": True,
-                "note": "already using this TTS model",
-            }
-
-        prev_id = self.config.chatterbox.model_id
-        self.console.print(f"[cyan]Loading TTS model: {model_id} (this may take a while)...[/cyan]")
-        try:
-            from localtalk.services.mlx_tts import MLXTextToSpeechService
-
-            # Assign id only for construction; roll back on failure (mirror STT).
-            self.config.chatterbox.model_id = model_id
-            new_tts = MLXTextToSpeechService(self.config.chatterbox, self.console)
-        except Exception as exc:
-            self.config.chatterbox.model_id = prev_id
-            return {"ok": False, "error": f"could not load TTS model {model_id!r}: {exc}"}
-
-        old_tts = self.tts
-        self.tts = new_tts
-        self._tts_cached = None  # old instance is obsolete
-        self.config.tts_backend = "chatterbox"
-        # ChatterBox speaks English: re-pair the STT input language and the
-        # session response directive with the voice, mirroring
-        # _tool_set_tts_backend, so a Chinese session can't end up with an
-        # English voice speaking mandated Chinese (or vice versa).
-        self.config.whisper.language = "en"
-        self._set_session_language("English")
-        if old_tts is not None:
-            del old_tts
-            import gc
-
-            gc.collect()
-        self.console.print(f"[green]TTS model set to: {model_id}[/green]")
-        return {
-            "ok": True,
-            "model_id": model_id,
-            "reloaded": True,
-            "tts_enabled": True,
-        }
+        return SessionTools(self).set_tts_model(model_id)
 
     def _tool_set_tts_backend(self, backend: str) -> dict:
-        """Hot-swap matching speech input and output language backends."""
-        target = {
-            "qwen_chinese": "qwen_chinese",
-            # The tool-facing name is the voice; config keeps the backend name.
-            # Tingting now resolves to the modern AVSpeechSynthesizer backend
-            # (in-process PCM, enhanced/eloquence voices); macos_say stays
-            # selectable via config as the legacy say-subprocess fallback.
-            "macos_tingting": "apple_speech",
-        }.get(backend, "chatterbox")
-        is_chinese = target in {"qwen_chinese", "apple_speech"}
-        stt_language = "zh" if is_chinese else "en"
-        if is_chinese and self.config.whisper.model_size.endswith(".en"):
-            # English-only Whisper checkpoints cannot transcribe Chinese; fail
-            # before touching any state instead of switching into a broken pair.
-            multilingual = self.config.whisper.model_size[: -len(".en")]
-            return {
-                "ok": False,
-                "error": (
-                    f"Whisper model {self.config.whisper.model_size!r} is English-only and cannot "
-                    f"transcribe Chinese. Switch the STT model to a multilingual size first "
-                    f"(e.g. 'use whisper {multilingual}'), then ask for Chinese again."
-                ),
-            }
-        if target == self.config.tts_backend and self.tts is not None:
-            self.config.whisper.language = stt_language
-            self._set_session_language("Simplified Chinese" if is_chinese else "English")
-            return {
-                "ok": True,
-                "backend": backend,
-                "model_id": self._active_tts_model_id(),
-                "reloaded": False,
-                "tts_enabled": True,
-                "note": "already using this TTS backend",
-            }
-
-        previous_backend = self.config.tts_backend
-        self.config.tts_backend = target
-        model_id = self._active_tts_model_id()
-        self.console.print(f"[cyan]Loading TTS backend: {backend} ({model_id}); this may take a while...[/cyan]")
-        try:
-            new_tts = self._load_tts_service(self.console)
-        except Exception as exc:
-            self.config.tts_backend = previous_backend
-            return {"ok": False, "error": f"could not load TTS backend {backend!r}: {exc}"}
-
-        old_tts = self.tts
-        self.tts = new_tts
-        self._tts_cached = None
-        self._tts_cached_backend = target
-        # Whisper is configured per session rather than per call. Pairing the
-        # input language with the output voice prevents Chinese speech from
-        # being forced through the prior English decoder setting.
-        self.config.whisper.language = stt_language
-        self._set_session_language("Simplified Chinese" if is_chinese else "English")
-        if old_tts is not None:
-            del old_tts
-            import gc
-
-            gc.collect()
-        self.console.print(f"[green]TTS backend set to: {backend}[/green]")
-        return {
-            "ok": True,
-            "backend": backend,
-            "model_id": model_id,
-            "language": "Simplified Chinese" if is_chinese else "English",
-            "stt_language": stt_language,
-            "reloaded": True,
-            "tts_enabled": True,
-        }
+        return SessionTools(self).set_tts_backend(backend)
 
     def _tool_set_stt_model(self, model: str, *, language: str | None = None) -> dict:
-        """Hot-swap Whisper STT model (and optional language) mid-session."""
-        from localtalk.services.tools.settings import WHISPER_MODEL_SIZES
-
-        model = (model or "").strip()
-        if model not in WHISPER_MODEL_SIZES:
-            return {
-                "ok": False,
-                "error": f"model must be one of: {', '.join(WHISPER_MODEL_SIZES)}",
-            }
-
-        same_model = model == self.config.whisper.model_size
-        same_lang = language is None or language == self.config.whisper.language
-        if same_model and same_lang and getattr(self, "stt", None) is not None:
-            return {
-                "ok": True,
-                "model": model,
-                "language": self.config.whisper.language,
-                "reloaded": False,
-                "note": "already using this STT model",
-            }
-
-        prev_size = self.config.whisper.model_size
-        prev_lang = self.config.whisper.language
-        self.config.whisper.model_size = model
-        if language is not None and language.strip():
-            self.config.whisper.language = language.strip()
-
-        self.console.print(
-            f"[cyan]Loading Whisper STT model: {self.config.whisper.model_size} "
-            f"(language={self.config.whisper.language}) — this may take a while...[/cyan]"
-        )
-        try:
-            from localtalk.services.speech_recognition import SpeechRecognitionService
-
-            new_stt = SpeechRecognitionService(self.config.whisper, self.console)
-        except Exception as exc:
-            # Roll back config on failure
-            self.config.whisper.model_size = prev_size
-            self.config.whisper.language = prev_lang
-            return {"ok": False, "error": f"could not load Whisper model {model!r}: {exc}"}
-
-        old_stt = getattr(self, "stt", None)
-        self.stt = new_stt
-        if old_stt is not None:
-            del old_stt
-            import gc
-
-            gc.collect()
-        self.console.print(
-            f"[green]STT model set to: {self.config.whisper.model_size} "
-            f"(language={self.config.whisper.language})[/green]"
-        )
-        return {
-            "ok": True,
-            "model": self.config.whisper.model_size,
-            "language": self.config.whisper.language,
-            "reloaded": True,
-        }
+        return SessionTools(self).set_stt_model(model, language=language)
 
     def _tool_set_vad_mode(
         self,
@@ -830,47 +390,7 @@ class VoiceAssistant:
         threshold: float | None = None,
         min_speech_ms: int | None = None,
     ) -> dict:
-        mode = mode.lower().strip()
-        if mode == "auto":
-            self.config.audio.use_vad = True
-            self.config.audio.vad_auto_start = True
-        elif mode == "manual":
-            self.config.audio.use_vad = True
-            self.config.audio.vad_auto_start = False
-        elif mode == "off":
-            self.config.audio.use_vad = False
-            self.config.audio.vad_auto_start = False
-        else:
-            return {"ok": False, "error": "mode must be auto, manual, or off"}
-
-        if threshold is not None:
-            if not 0.0 <= threshold <= 1.0:
-                return {"ok": False, "error": "threshold must be between 0 and 1"}
-            self.config.audio.vad_threshold = threshold
-        if min_speech_ms is not None:
-            if min_speech_ms < 0:
-                return {"ok": False, "error": "min_speech_ms must be >= 0"}
-            self.config.audio.vad_min_speech_duration_ms = min_speech_ms
-
-        # Re-validate Silero constraints when auto VAD is on
-        try:
-            self.config.audio = self.config.audio.model_validate(self.config.audio.model_dump())
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
-        self.console.print(
-            f"[cyan]VAD mode set to: {mode} "
-            f"(threshold={self.config.audio.vad_threshold}, "
-            f"min_speech_ms={self.config.audio.vad_min_speech_duration_ms})[/cyan]"
-        )
-        return {
-            "ok": True,
-            "vad_mode": mode,
-            "use_vad": self.config.audio.use_vad,
-            "vad_auto_start": self.config.audio.vad_auto_start,
-            "threshold": self.config.audio.vad_threshold,
-            "min_speech_ms": self.config.audio.vad_min_speech_duration_ms,
-        }
+        return SessionTools(self).set_vad_mode(mode, threshold=threshold, min_speech_ms=min_speech_ms)
 
     def _apply_web_tools_startup_policy(self) -> None:
         """Set web_tools.enabled from policy + network status (before LLM init)."""
@@ -946,6 +466,8 @@ class VoiceAssistant:
         print_assistant_utterance(self.console, spoken)
         if not self.tts or not getattr(self, "audio", None):
             return
+        if not self._ensure_voice_for_text(spoken):
+            return
         try:
             with self.console.status("[cyan]Synthesizing speech...[/cyan]", spinner="dots"):
                 sample_rate, audio_array = self.tts.synthesize_long_form(spoken)
@@ -964,69 +486,8 @@ class VoiceAssistant:
         )
 
     def _speak_sentence(self, sentence: str, metrics: dict) -> None:
-        """Synthesize and play one spoken sentence (main thread — MLX is not multi-thread safe).
-
-        Called mid-generation as final-channel sentences complete, so time-to-first-audio
-        is first-sentence latency rather than full-response latency. Further tokens wait
-        until this chunk finishes (serial MLX use).
-        """
-        if self._playback_stop.is_set() or not self.tts:
-            return
-
-        spoken = clean_text_for_tts(_strip_markdown(sentence)).strip()
-        if not spoken:
-            return
-
-        try:
-            tts_start = time.perf_counter()
-            sample_rate, audio_array = self.tts.synthesize(spoken)
-            if self.config.audio.save_generated_audio:
-                audio_path = self.audio.save_audio_file(audio_array, sample_rate)
-                self.console.print(f"[dim]Saved audio to: {audio_path}[/dim]")
-            tts_ms = (time.perf_counter() - tts_start) * 1000.0
-            metrics["tts_ms"] = float(metrics.get("tts_ms") or 0.0) + tts_ms
-            metrics["chunks"] = int(metrics.get("chunks") or 0) + 1
-            if metrics.get("tts_first_chunk_ms") is None:
-                metrics["tts_first_chunk_ms"] = tts_ms
-
-            if self._playback_stop.is_set():
-                return
-
-            if not metrics.get("_first_audio"):
-                try:
-                    self.audio.play_earcon("speak")
-                except Exception:
-                    pass
-                metrics["time_to_first_audio_ms"] = (time.perf_counter() - metrics["_respond_start"]) * 1000.0
-                stt_ms = metrics.get("stt_ms")
-                if stt_ms is not None:
-                    metrics["time_to_first_audio_from_speech_end_ms"] = float(stt_ms) + float(
-                        metrics["time_to_first_audio_ms"]
-                    )
-                metrics["_first_audio"] = True
-                if self.config.show_stats:
-                    self.console.print(
-                        f"[dim]📊 Time to first audio: "
-                        f"{metrics['time_to_first_audio_ms']:.0f} ms "
-                        f"(first TTS chunk {tts_ms:.0f} ms)[/dim]"
-                    )
-
-            play_start = time.perf_counter()
-            # Edge fades + inter-sentence silence: 0.7 streaming TTS restarts
-            # PortAudio per sentence (unlike pre-0.7 single long-form play).
-            finished = self.audio.play_audio(
-                audio_array,
-                sample_rate,
-                interrupt_check=self._playback_stop.is_set,
-                trail_silence_ms=float(self._tts_silence_between_pieces_ms()),
-            )
-            metrics["play_ms"] = float(metrics.get("play_ms") or 0.0) + (time.perf_counter() - play_start) * 1000.0
-            if not finished:
-                metrics["interrupted"] = True
-                self._playback_stop.set()
-        except Exception as exc:
-            metrics["tts_error"] = str(exc)
-            self.console.print(f"[yellow]TTS chunk failed: {exc}[/yellow]")
+        """Synthesize and play one spoken sentence. See core.turn_pipeline."""
+        TurnPipeline(self).speak_sentence(sentence, metrics)
 
     def _respond(
         self,
@@ -1042,136 +503,7 @@ class VoiceAssistant:
             stt_time: Optional STT duration in seconds (voice turns).
             input_mode: ``text`` or ``voice`` for metrics.
         """
-        self._playback_stop.clear()
-        respond_start = time.perf_counter()
-        stt_ms = (stt_time * 1000.0) if stt_time is not None else None
-
-        metrics: dict = {
-            "session_id": self.config.session_id,
-            "input_mode": input_mode,
-            "stt_ms": stt_ms,
-            "llm_provider": getattr(self, "llm_provider", self.config.llm_provider),
-            "model": (
-                "SystemLanguageModel.default"
-                if getattr(self, "llm_provider", None) == "apple"
-                else self.config.mlx_lm.model
-            ),
-            "whisper_model": self.config.whisper.model_size,
-            "tts_backend": self.config.tts_backend,
-            "reasoning_effort": self.config.mlx_lm.reasoning_effort.value,
-            "chunks": 0,
-            "interrupted": False,
-            "_respond_start": respond_start,
-            "_first_audio": False,
-        }
-
-        if self.tts:
-
-            def sink(sentence: str) -> None:
-                self._speak_sentence(sentence, metrics)
-
-        else:
-            sink = None
-
-        # Esc during generation/playback stops remaining speech
-        esc_stop = threading.Event()
-        esc_thread: threading.Thread | None = None
-
-        def _esc_watcher() -> None:
-            if not sys.stdin.isatty():
-                return
-            try:
-                fd = sys.stdin.fileno()
-            except (AttributeError, OSError, ValueError):
-                return
-            old_settings = termios.tcgetattr(fd)
-            try:
-                tty.setcbreak(fd)
-                while not esc_stop.is_set():
-                    if _stdin_has_key(timeout=0.1):
-                        key = _read_key_raw()
-                        if key == _ESC:
-                            self._playback_stop.set()
-                            try:
-                                self.audio.stop_playback()
-                            except Exception:
-                                pass
-                            self.console.print("[dim]⏹ Stopped.[/dim]")
-                            break
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-        if self.tts:
-            esc_thread = threading.Thread(target=_esc_watcher, daemon=True, name="localtalk-esc-stop")
-            esc_thread.start()
-
-        llm_start = time.perf_counter()
-        response = ""
-        llm_failed = False
-        try:
-            response = self.llm.generate_response(
-                text,
-                self.config.session_id,
-                on_spoken_sentence=sink,
-            )
-        except Exception as exc:
-            llm_failed = True
-            if self.tts:
-                try:
-                    self.audio.play_earcon("error")
-                except Exception:
-                    pass
-            # Surface a controlled message instead of an unhandled traceback mid-turn.
-            self.console.print(f"[red]LLM error: {exc}[/red]")
-            metrics["error"] = str(exc)
-            response = ""
-            print_assistant_utterance(
-                self.console,
-                "Sorry, I hit an error generating a response. Please try again.",
-            )
-        finally:
-            wall_ms = (time.perf_counter() - llm_start) * 1000.0
-            # TTS/play run inside the generate_response call via the sink; subtract
-            # so llm_ms approximates model time only.
-            tts_ms = float(metrics.get("tts_ms") or 0.0)
-            play_ms = float(metrics.get("play_ms") or 0.0)
-            metrics["llm_ms"] = max(0.0, wall_ms - tts_ms - play_ms)
-            metrics["respond_wall_ms"] = wall_ms
-            esc_stop.set()
-            if esc_thread is not None:
-                esc_thread.join(timeout=1.0)
-
-        metrics["response_chars"] = len(response or "")
-        metrics["response_words"] = len((response or "").split())
-        metrics["total_ms"] = (time.perf_counter() - respond_start) * 1000.0
-        if stt_ms is not None:
-            metrics["pipeline_total_ms"] = float(stt_ms) + float(metrics["total_ms"])
-
-        if self.config.show_stats and not llm_failed:
-            self.console.print(f"[dim]📊 LLM: {metrics['llm_ms'] / 1000.0:.2f}s[/dim]")
-            if metrics.get("tts_ms") is not None:
-                self.console.print(
-                    f"[dim]📊 TTS ({self.config.tts_backend}): "
-                    f"{float(metrics['tts_ms']) / 1000.0:.2f}s "
-                    f"across {metrics.get('chunks', 0)} chunk(s)[/dim]"
-                )
-            total_s = metrics["total_ms"] / 1000.0
-            if stt_time is not None:
-                total_s += stt_time
-            self.console.print(f"[dim]📊 Total: {total_s:.2f}s[/dim]")
-
-        # Persist metrics (strip internal keys)
-        record = {k: v for k, v in metrics.items() if not k.startswith("_")}
-        try:
-            path = self.metrics.record_turn(record)
-            if self.config.show_stats:
-                self.console.print(f"[dim]📊 Metrics → {path}[/dim]")
-        except Exception as exc:
-            self.console.print(f"[yellow]Warning: could not write metrics: {exc}[/yellow]")
-
-        if not self.tts and not llm_failed:
-            self.console.print("[dim]Note: TTS is disabled.[/dim]")
-        soft_rule(self.console)
+        TurnPipeline(self).respond(text, stt_time, input_mode=input_mode)
 
     def _process_text_response(self, user_input: str) -> None:
         """Generate and play response for text input."""
@@ -1373,39 +705,19 @@ class VoiceAssistant:
                 esc_pressed = threading.Event()
                 user_pressed_esc = threading.Event()
 
-                def _esc_listener():
-                    """Background thread: detect Esc during VAD listening."""
-                    try:
-                        fd = sys.stdin.fileno()
-                    except (AttributeError, OSError, ValueError):
-                        return  # stdin not a real fd (pytest, piped input, etc.)
-                    if not sys.stdin.isatty():
-                        return
-                    old_settings = termios.tcgetattr(fd)
-                    try:
-                        # Keep terminal output processing enabled so Rich Live can
-                        # redraw in place while input remains character-at-a-time.
-                        tty.setcbreak(fd)
-                        while not esc_pressed.is_set():
-                            if _stdin_has_key(timeout=0.1):
-                                key = _read_key_raw()
-                                if key == _ESC:
-                                    user_pressed_esc.set()
-                                    esc_pressed.set()
-                                    break
-                    finally:
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                def _on_esc() -> None:
+                    user_pressed_esc.set()
+                    esc_pressed.set()
 
-                listener_thread = threading.Thread(target=_esc_listener, daemon=True)
-                listener_thread.start()
+                watcher = EscTerminalWatcher(_on_esc)
+                watcher.start()
 
                 try:
                     audio_data = self.audio.record_with_vad_auto(
                         interrupt_check=esc_pressed.is_set,
                     )
                 finally:
-                    esc_pressed.set()  # Signal listener to stop
-                    listener_thread.join(timeout=1.0)
+                    watcher.stop()
 
                 if user_pressed_esc.is_set():
                     # User pressed Esc during VAD — switch to keyboard input

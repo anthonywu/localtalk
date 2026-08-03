@@ -8,9 +8,23 @@ import pytest
 
 from localtalk.models.config import AppConfig
 from localtalk.services.apple_llm import AppleFoundationModelService, resolve_llm_provider
-from localtalk.services.foundation_models_helper import is_golden_gate_or_newer, macos_version_tuple
+from localtalk.services.foundation_models_helper import (
+    bundled_swift_source,
+    is_golden_gate_or_newer,
+    macos_version_tuple,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def test_bundled_swift_source_is_package_copy():
+    """The helper source ships inside the package; no repo-root fallback."""
+    path = bundled_swift_source()
+    assert path.is_file()
+    # <pkg>/native/foundation_models/main.swift — the single canonical copy
+    assert path.name == "main.swift"
+    assert path.parents[1].name == "native"
+    assert path.parents[2].name == "localtalk"
 
 
 def test_macos_version_tuple_parses(monkeypatch):
@@ -73,7 +87,7 @@ def test_online_instructions_search_without_confirmation():
     svc = _make_apple_svc_for_generate()
     svc.web_tools.enabled = True
 
-    assert "never ask whether to search" in svc._full_instructions()
+    assert "never ask whether they want you to search" in svc._full_instructions().lower()
     assert "Do not ask for approval" in svc._full_instructions()
 
 

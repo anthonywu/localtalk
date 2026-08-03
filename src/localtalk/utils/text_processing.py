@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 
+import mistune
+from mistune.renderers.html import HTMLRenderer
+
 # Sentence boundary: Latin punctuation only terminates a sentence when followed
 # by whitespace or end-of-string (protects decimals like "3.5"); CJK punctuation
 # (。！？) terminates on its own because Chinese has no inter-sentence spaces —
@@ -154,3 +157,58 @@ def chunk_text_for_streaming(text: str, max_chunk_size: int = 40) -> list[str]:
         chunks.append(current_chunk)
 
     return chunks
+
+
+class _PlainTextRenderer(HTMLRenderer):
+    """Renderer that strips markdown formatting, outputting plain text."""
+
+    def text(self, text):
+        return text
+
+    def emphasis(self, text):
+        return text
+
+    def strong(self, text):
+        return text
+
+    def link(self, text, **attrs):
+        return text
+
+    def image(self, text, **attrs):
+        return text or ""
+
+    def codespan(self, text):
+        return text
+
+    def linebreak(self):
+        return "\n"
+
+    def softbreak(self):
+        return " "
+
+    def paragraph(self, text):
+        return text + "\n\n"
+
+    def heading(self, text, level, **attrs):
+        return text + "\n"
+
+    def block_code(self, code, **attrs):
+        return code + "\n"
+
+    def block_quote(self, text):
+        return text
+
+    def list(self, text, ordered, **attrs):
+        return text
+
+    def list_item(self, text, **attrs):
+        return "• " + text + "\n" if text else ""
+
+    def thematic_break(self):
+        return "\n"
+
+
+def strip_markdown(text: str) -> str:
+    """Strip markdown formatting from text, returning plain text."""
+    md = mistune.create_markdown(renderer=_PlainTextRenderer())
+    return md(text).strip()
