@@ -86,8 +86,8 @@ class VoiceAssistant:
             tagline = Text("🎙️ Private, Local Voice Assistant 🤖", style="cyan")
             self.console.print(tagline)
 
-            alpha_warning = Text("🐣 Alpha Software - not ready for general use. 🐣", style="cyan")
-            self.console.print(alpha_warning)
+            beta_note = Text("🐣 Beta — usable end to end; still tracking open-model quality. 🐣", style="cyan")
+            self.console.print(beta_note)
 
             # Add version info
             from importlib.metadata import PackageNotFoundError, version

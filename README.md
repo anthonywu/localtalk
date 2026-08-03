@@ -1,10 +1,19 @@
 # 💻🎤🔊 localtalk
 
-A privacy-first voice assistant that runs entirely offline on Apple Silicon. It's built for **DIYers, educators, parents, and learners** who want a fully-local voice assistant they can understand, modify, and teach with — and for travelers and the privacy-conscious who value their data sovereignty. No accounts, no cloud services, no tracking.
+**A voice assistant that never leaves your Mac.**
 
-Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
+Listens, reasons, and speaks entirely offline on Apple Silicon. No accounts. No API keys. No cloud required after first model download.
 
-> **Status:** Alpha software (`0.6.0`), but as of August 2026 it is rather usable. It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — though it is not yet polished for general use. We believe we are one or two generations of open-weight models away from it being generally usable. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+```bash
+uv tool install localtalk   # or: uvx localtalk
+localtalk
+```
+
+Built for people who want a **full local voice product** they can run, inspect, fork, and teach with — not a library to wrap, and not a free trial for someone else's SaaS. Core path: speech in → model thinks → speech out. Optional tools (web search, browser, offline knowledge packs) are progressive power features under your control — say "disable web" anytime.
+
+**Who it's for.** Privacy-minded Mac users comfortable in a terminal; DIYers, educators, and parents who treat localtalk as a **teaching tool** (run it, read the prompts, fork the code, learn how the loop works). Kids are in scope with **parental guidance** — this is not a cloud babysitter or content-filter product. Also useful offline for travel once models and knowledge packs are cached.
+
+> **Status:** Beta (`0.9.0`) — end-to-end usable: speech recognition, reasoning, and natural TTS, all offline. Still tracking open-model quality; we expect one or two more model generations before this feels fully polished for everyone. Default persona ships in [`prompts/default.txt`](prompts/default.txt) (overridable via CLI).
 
 ## Design Philosophy
 
@@ -16,17 +25,11 @@ LocalTalk has a deliberate scope and a few opinions that shape how it's built.
 
 **Terminal-first, terminal-only.** LocalTalk lives in the terminal, and a GUI is explicitly **out of scope**. Keeping the interface textual keeps the iteration loop tight: the same CLI a human drives is what a coding assistant drives during development, and what runs the project's tests, evals, and other verifications. A GUI would add surface area, slow that loop, and pull focus from the core STT/LLM/TTS work. If you want a GUI, wrap the CLI yourself — it's a stable boundary, not a thing we plan to build.
 
-**Built for tinkerers and learners.** The intended audience is DIYers, educators, parents, and learners — people who want to understand, modify, and teach with a fully-local voice assistant, not just consume one. That shapes the defaults: zero accounts, zero API keys, one-command install, and everything inspectable on disk.
+**Built for tinkerers, teachers, and learners.** Understand it, modify it, teach with it — not just consume it. Zero accounts, zero API keys, one-command install, prompts and tools on disk. Great for classrooms and home learning **with an adult in the loop**; parental guidance is expected when kids use it.
 
-## Why This Project Exists
+## Why Offline
 
-1. **Technology preview** - While the tech isn't perfect yet, we can build something functional right now that respects your privacy and runs entirely offline.
-
-2. **As a vibe check on offline-first AI** - How realistic is it to avoid cloud services like OpenAI and ElevenLabs? This project explores what's possible with local models and helps identify the gaps.
-
-3. **Future-proofing for real-time local AI** - One day soon, these models and consumer computers will be capable of real-time TTS that rivals cloud services. When that day comes, this library will be ready to leverage those improvements immediately.
-
-4. **Abundant access** - We want AI assistance to be effectively free to use: something we can give to students and children without worrying that curiosity or experimentation is quietly racking up API bills. Our long-term goal is for using LocalTalk to cost little more than the electricity required to run it.
+Most voice assistants are rented: your words go to someone else's servers, and curiosity quietly costs tokens. localtalk is **owned** — private by default, free after electricity once models are cached, and ready to absorb the next generation of open models the day they ship. Optional online tools exist when you want them; turn Wi‑Fi off (or say "disable web") and the core voice loop still works.
 
 ### Why Not Use Apple's Built-in "Say" Command?
 
@@ -61,22 +64,28 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 
 ## Features
 
-- 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
-- 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD — auto-listen by default, no button-pressing required
-- 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
-- ⚡ **Sentence-streamed speech**: Speaks the first finished sentence as soon as the model produces it — no waiting for the full reply to synthesize
-- 📈 **Local turn metrics**: Each turn appends latency stats to `~/.cache/localtalk/metrics/turns.jsonl` (STT/LLM/TTS, time-to-first-audio); pass `--stats` to print them live
-- 🔔 **Earcons**: Quiet listen / heard / speak / error tones; press **Esc** during a reply to stop remaining speech
-- 🤖 **Language Model**: Defaults to **gpt-oss via MLX**. On **macOS 27+ (Golden Gate)**, opt into Apple **Foundation Models** (`SystemLanguageModel`, on-device Apple Intelligence) with `--llm-provider auto` or `--llm-provider apple`.
-- 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
-- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
-- 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
-- 🔊 **Local TTS**: ChatterBox Turbo for English, free native macOS Tingting for Chinese, plus an optional Qwen3-TTS Chinese voice
-- 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
-- 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
-- 🕒 **Datetime-Aware Persona**: A warm default persona in [`prompts/default.txt`](prompts/default.txt), automatically augmented with the current date and time so the assistant knows "today"
-- 💾 **Fully Offline**: No internet connection required after setup (you can even turn off WiFi)
-- 🔒 **100% Private**: Your conversations never leave your device
+### Voice loop (the product)
+
+- 🎤 **Speech recognition** — OpenAI Whisper, local
+- 🎙️ **Auto-listen VAD** — Silero detects start/stop; no button-pressing by default
+- ⚡ **Sentence-streamed speech** — first finished sentence spoken as soon as the model produces it
+- 🔊 **Local TTS** — ChatterBox Turbo (English); free native macOS Tingting + optional Qwen3-TTS (Chinese)
+- 🗣️ **TTS-ready output** — speakable text only (no markdown leaking into audio)
+- 💬 **Type or speak** — Esc toggles keyboard ↔ voice during auto-listen
+- 🔔 **Earcons + Esc stop** — quiet listen/heard/speak/error cues; Esc stops remaining speech mid-reply
+- 📊 **Live mic waveform** + optional **turn metrics** (`--stats`, `~/.cache/localtalk/metrics/turns.jsonl`)
+
+### Local intelligence
+
+- 🤖 **LLM** — defaults to **gpt-oss via MLX**; on **macOS 27+**, opt into Apple **Foundation Models** with `--llm-provider auto` or `apple`
+- 🧠 **Mid-session reasoning** — say "think harder" / "think faster" without restarting
+- 🕒 **Datetime-aware persona** — warm default in [`prompts/default.txt`](prompts/default.txt), overridable via CLI
+
+### Knowledge & tools (progressive power features)
+
+- 📚 **Offline knowledge packs** — download Simple English Wikipedia (etc.) into cache, query offline
+- 🌐 **Online tools under your control** — when online, web search + local browser can turn on; say "enable web" / "disable web" anytime. Core STT/LLM/TTS never need the network after setup
+- 💾 **Private by default** — conversations stay on device unless you enable tools that use the network
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 [project]
 name = "localtalk"
 version = "0.9.0"
-description = "A local/offline-capable voice assistant with speech recognition, LLM processing, and text-to-speech"
+description = "Offline voice assistant for Apple Silicon: local speech recognition, LLM, and TTS. No API keys."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -19,7 +19,7 @@ keywords = [
   "voice-assistant",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
     "Operating System :: MacOS :: MacOS X",
