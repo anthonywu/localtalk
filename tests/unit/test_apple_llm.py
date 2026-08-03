@@ -196,17 +196,23 @@ def test_compose_prompt_includes_history():
 
 
 def test_foundation_models_process_timeout():
+    """Timeout path must fire without a multi-second wall-clock sleep.
+
+    The reader blocks on an Event (released after the assertion) so
+    ``queue.get(timeout=...)`` is what drives the failure, not ``time.sleep``.
+    """
+    import threading
+
     from localtalk.services.foundation_models_helper import FoundationModelsProcess
 
     proc = FoundationModelsProcess.__new__(FoundationModelsProcess)
     proc.binary = MagicMock()
     proc._lock = __import__("threading").Lock()
+    release_reader = threading.Event()
 
     class FakeStdout:
         def readline(self):
-            import time
-
-            time.sleep(2.0)
+            release_reader.wait(timeout=5.0)
             return ""
 
     class FakeProc:
@@ -223,10 +229,13 @@ def test_foundation_models_process_timeout():
     proc.start = lambda: None  # type: ignore[method-assign]
     proc._ensure = lambda: fake  # type: ignore[method-assign]
 
-    events = list(proc.iter_events({"cmd": "status"}, timeout_s=0.2))
-    assert events
-    assert events[-1].get("ok") is False
-    assert "timed out" in (events[-1].get("error") or "").lower()
+    try:
+        events = list(proc.iter_events({"cmd": "status"}, timeout_s=0.05))
+        assert events
+        assert events[-1].get("ok") is False
+        assert "timed out" in (events[-1].get("error") or "").lower()
+    finally:
+        release_reader.set()
 
 
 def _make_apple_svc_for_generate(*, max_tool_rounds: int = 3) -> AppleFoundationModelService:
