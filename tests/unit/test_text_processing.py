@@ -31,6 +31,16 @@ class TestGetFirstSentence:
         assert first == "No ending yet"
         assert rest == ""
 
+    def test_decimal_not_split(self):
+        first, rest = get_first_sentence("The price is 3.5 dollars. Done.")
+        assert first == "The price is 3.5 dollars."
+        assert rest == "Done."
+
+    def test_ellipsis_not_split_mid_token(self):
+        first, rest = get_first_sentence("Wait... what happened?")
+        assert first == "Wait... what happened?"
+        assert rest == ""
+
 
 class TestTakeCompleteSentences:
     def test_emits_complete_only(self):

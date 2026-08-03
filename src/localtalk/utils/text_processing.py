@@ -54,28 +54,26 @@ def clean_text_for_tts(text: str) -> str:
 def get_first_sentence(text: str) -> tuple[str, str]:
     """Extract the first sentence for immediate TTS playback.
 
-    Returns:
-        ``(first_sentence, remaining_text)``. If no sentence ending is found,
-        returns ``(text, "")``.
+    Uses the same boundary rules as :func:`take_complete_sentences` (Latin
+    punctuation only terminates when followed by whitespace/end; CJK marks
+    terminate alone; tiny leads merge). Returns ``(text, "")`` when no
+    complete sentence boundary is found.
     """
     text = text.strip()
     if not text:
         return "", ""
 
-    match = re.search(r"(.+?[.!?。！？])\s*(.*)", text, re.DOTALL)
-    if not match:
+    sentences, consumed = take_complete_sentences(text)
+    if not sentences:
         return text, ""
 
-    first_sentence = match.group(1).strip()
-    remaining = match.group(2).strip()
-
-    # Too short alone — fold in the next sentence when available.
-    if len(first_sentence) < _tiny_lead_threshold(first_sentence) and remaining:
-        next_match = re.search(r"(.+?[.!?。！？])\s*(.*)", remaining, re.DOTALL)
-        if next_match:
-            first_sentence = f"{first_sentence} {next_match.group(1).strip()}"
-            remaining = next_match.group(2).strip()
-
+    first_sentence = sentences[0]
+    remaining = text[consumed:].strip()
+    # When tiny-lead merge consumed two sentences, remaining still starts after
+    # the full consumed span; if more complete sentences were in the buffer,
+    # rejoin them into remaining so callers still see a single first + rest.
+    if len(sentences) > 1:
+        remaining = " ".join([*sentences[1:], remaining]).strip() if remaining else " ".join(sentences[1:])
     return first_sentence, remaining
 
 
