@@ -27,6 +27,8 @@ LocalTalk has a deliberate scope and a few opinions that shape how it's built.
 
 **Built for tinkerers, teachers, and learners.** Understand it, modify it, teach with it — not just consume it. Zero accounts, zero API keys, one-command install, prompts and tools on disk. Great for classrooms and home learning **with an adult in the loop**; parental guidance is expected when kids use it.
 
+**Marketing surfaces follow Apple HIG fundamentals.** The project site (`docs/index.html`) prioritizes clarity, deference, and depth: system typography, sufficient contrast, light/dark via system appearance, reduced-motion support, visible focus rings, and 44pt-class touch targets. It is an independent project and is not affiliated with Apple Inc.
+
 ## Why Offline
 
 Most voice assistants are rented: your words go to someone else's servers, and curiosity quietly costs tokens. localtalk is **owned** — private by default, free after electricity once models are cached, and ready to absorb the next generation of open models the day they ship. Optional online tools exist when you want them; turn Wi‑Fi off (or say "disable web") and the core voice loop still works.

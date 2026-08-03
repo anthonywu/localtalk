@@ -1,68 +1,113 @@
 # Marketing Site — localtalk on GitHub Pages
 
 ## Goal
+
 A single-page marketing site for `localtalk`, statically hosted on GitHub Pages at
-`https://anthonywu.github.io/localtalk/`, sourced from the existing `/docs` folder.
+`https://anthonywu.github.io/localtalk/`, sourced from `/docs`.
+
+## Design north star: Apple HIG
+
+The site is a **marketing surface**, not a macOS app — but visual and interaction
+choices deliberately track [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/)
+fundamentals so an Apple-native product feels at home.
+
+### Fundamentals applied
+
+| HIG idea | How the site expresses it |
+| --- | --- |
+| **Clarity** | One hero promise; type hierarchy mapped to SF-like scale (caption → hero); short body copy; SF-style line icons instead of emoji clutter |
+| **Deference** | Content first: light chrome, thin separators, no busy backgrounds or decorative grids; nav is translucent and stays out of the way |
+| **Depth** | Subtle elevation (`shadow-soft`) and grouped canvases (`#f5f5f7` / system grouped); cards over flat walls only when they group related content |
+
+### Foundations checklist
+
+**Typography**
+
+- System stack: `-apple-system`, `BlinkMacSystemFont`, SF Pro Text/Display, Helvetica Neue fallbacks
+- Mono: SF Mono / system monospace for install commands only
+- Approximate marketing scale: caption 12, footnote 13, subhead 15, body 17, title3 20, large title 34, display/hero 48–56
+- Prefer **sentence case**; avoid shouting ALL CAPS for body content (eyebrows use small weight + tracking, not dense caps blocks)
+- `text-wrap: balance` / `pretty` on headlines and body where it helps
+
+**Color**
+
+- Semantic tokens via CSS variables: label, secondary, tertiary, fill, canvas, grouped, separator, link
+- Link blue closer to system blue (`#0066cc` light / `#0a84ff` dark) — sufficient contrast on white/black
+- **Private by default** language (not absolute “100% private”)
+- **Light + dark** via `prefers-color-scheme` (no toggle chrome) — matches system appearance preference
+- Do **not** use the Apple logo or 🍎; do not imply Apple affiliation (footer disclaimer)
+
+**Layout**
+
+- Comfortable measure: ~980px reading column, ~1100px wide grids
+- Generous vertical rhythm (section padding ~80–96px)
+- 8pt-ish spacing; cards at 18px corner radius (marketing soft radius, not iOS continuous corner claim)
+
+**Accessibility (HIG + WCAG-minded)**
+
+- Skip link to `#main`
+- Visible `:focus-visible` rings (system blue)
+- Minimum **44×44 pt** touch targets for buttons and icon controls
+- Links that matter use **underline** (not color alone)
+- `prefers-reduced-motion: reduce` disables entrance and decorative motion
+- Terminal mockup has `sr-only` summary for assistive tech
+- Copy buttons announce “Copied” via `aria-label` temporarily
+- `color-scheme` + `theme-color` meta for browser chrome
+
+**Motion**
+
+- Purposeful, short (≤0.6s), ease `cubic-bezier(0.25, 0.1, 0.25, 1)`
+- No parallax, no bounce, no hover-lift that shifts layout
+
+**Interaction**
+
+- Primary CTA: pill (`border-radius: 980px`), filled system blue
+- Secondary: stroke pill
+- Install bars: monospaced command + copy control (clipboard, with fallback)
+
+### Explicit non-goals
+
+- Pixel-perfect SF Symbols (inline SVG stand-ins only)
+- Liquid Glass / full macOS 26+ material stack (static marketing page)
+- Claiming App Store or Apple endorsement
+- Custom dark-mode toggle UI (system preference only)
 
 ## Decisions (locked)
-- **Stack:** single `index.html`, Tailwind via CDN (`cdn.tailwindcss.com`), no build step.
-- **Hosting:** GitHub Pages, Source = `main` branch `/docs` folder (configured in repo Settings → Pages).
-- **Aesthetic:** clean Apple-native light (SF-inspired type, generous whitespace, subtle shadows,
-  Apple-blue accent), no dark mode toggle in v1.
-- **Base path:** project-page URL has a `/localtalk/` prefix → all asset links **must be relative**
-  (`./...`), never root-absolute. No external local assets needed (Tailwind is CDN; fonts use the
-  system stack), so this is low-risk.
 
-## Site structure (single page, top → bottom)
-1. **Nav** — `💻🎤🔊 localtalk` wordmark + anchor links (Features, Install, Philosophy) +
-   GitHub + PyPI links + a primary "Get started" button.
-2. **Hero** — headline: privacy-first voice assistant, runs entirely offline on Apple Silicon.
-   Subhead naming the audience (DIYers, educators, parents, learners). CTA: copy-to-clipboard
-   install one-liner `uv tool install localtalk` + a `uvx localtalk` "try now" hint. A clean
-   terminal mockup showing `$ localtalk`.
-3. **Pillars** — 3–4 cards: **Fully offline** (turn off WiFi, it still works), **100% private**
-   (conversations never leave the device), **Zero API keys** (no accounts, ever), **Apple-native**
-   (AVFoundation, Foundation Models, Tingting).
-4. **Features grid** — condensed from README: sentence-streamed TTS, Silero VAD auto-listen,
-   live waveform, mid-session reasoning control ("think harder"), offline knowledge packs
-   (Wikipedia-in-your-cache), online tools w/ voice toggle, dual type/speak input, Tingting +
-   Qwen3-TTS Chinese voices, datetime-aware persona.
-5. **Install / Quick start** — `uv tool install localtalk` then `localtalk`; note models download
-   on first run; note macOS + Apple Silicon + Python 3.11+ + libsndfile.
-6. **Design Philosophy** — the four principles condensed (Apple-native end to end; macOS-first
-   latest-first w/ best-effort fallbacks; terminal-first terminal-only / no GUI; built for
-   tinkerers & learners). Link back to README.
-7. **Why "LocalTalk"** — the Apple LocalTalk networking homage (nice narrative hook).
-8. **Footer** — MIT license, GitHub / PyPI links, short acknowledgments.
+- **Stack:** single `index.html`, Tailwind via CDN, no build step; design tokens mostly in CSS variables for light/dark.
+- **Hosting:** GitHub Pages, Source = branch `/docs` folder.
+- **Base path:** project-page `/localtalk/` → relative asset URLs only.
+- **Positioning copy:** see `plan/positioning.md` (beta 0.9.0, teaching tool + parental guidance, voice loop first).
 
-## Design system
-- **Type:** `-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif`.
-  Mono accents (`ui-monospace, SFMono-Regular`) for code/terminal.
-- **Colors:** white / `#f5f5f7` canvas, near-black `#1d1d1f` text, Apple blue `#0071e3` primary CTA,
-  subtle gray borders `#d2d2d7`.
-- **Components:** rounded-2xl cards, soft `shadow-sm`, hover lift; sticky translucent nav w/ blur.
-- **Motion:** minimal — button hover, subtle fade-in via Tailwind `transition`.
+## Site structure (top → bottom)
 
-## Files to create
-- `docs/index.html` — the whole site (Tailwind config inlined for custom colors/fonts).
-- `docs/CNAME` — **not** added (project-page URL, not a custom domain).
-- `docs/robots.txt` — optional, allow-all. (Nice-to-have, can defer.)
+1. **Skip link** + **nav** — wordmark (SVG mark, not emoji) · Features · Install · Philosophy · Why · GitHub · Get started  
+2. **Hero** — “never leaves your Mac” · install one-liner · terminal mockup (decorative + sr-only)  
+3. **Pillars** — Offline · Private by default · Zero API keys · Built for Mac  
+4. **Features** — Voice loop grid · Power features grid  
+5. **Install** — one command · needs / dep / secrets  
+6. **Philosophy** — four opinions + HIG nod (clarity / deference / depth)  
+7. **Why LocalTalk** — name homage  
+8. **Closing CTA** — teach the loop  
+9. **Footer** — links, MIT, **not affiliated with Apple**
 
-Note: `docs/WAVEFORMS.md` already exists and stays untouched; Pages serves `index.html` as the
-homepage and the `.md` is simply an unlinked orphan.
+## Files
 
-## GitHub Pages setup (manual, one-time — I cannot set repo settings)
-1. Repo → **Settings → Pages**.
-2. **Source:** `Deploy from a branch`.
-3. **Branch:** `main` / folder **`/docs`** → **Save**.
-4. Site goes live at `https://anthonywu.github.io/localtalk/` within ~1 min.
+- `docs/index.html` — site  
+- `docs/WAVEFORMS.md` — unlinked technical note (leave as-is)  
+- `plan/marketing_site.md` — this design brief  
+- `plan/positioning.md` — product message hierarchy  
 
-## Out of scope for v1 (follow-ups)
-- Dark mode / theme toggle.
-- Product screenshots or a demo audio clip (needs assets we don't have yet).
-- SEO sitemap / structured data.
-- A `/docs` README rendering of WAVEFORMS.md.
+## GitHub Pages setup (manual)
 
-## Open question
-- Hero visual: terminal mockup only (zero asset deps, ships fastest) vs. a waveform motif banner
-  (needs a tiny inline SVG, still no external asset). I'd default to **terminal mockup** — confirm?
+1. Repo → **Settings → Pages**  
+2. Source: Deploy from a branch  
+3. Branch + **`/docs`** → Save  
+4. Live at `https://anthonywu.github.io/localtalk/`
+
+## Follow-ups (optional)
+
+- Real product screenshot or short silent demo GIF (highest conversion asset still missing)  
+- Open Graph image asset  
+- Structured data (`SoftwareApplication`)  
+- Self-host critical CSS if CDN policy matters  
