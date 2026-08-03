@@ -229,11 +229,11 @@ class TestGenerateResponse:
         )
         return fake_parser
 
-    def test_generate_returns_response(self, mock_parser):
+    def test_generate_returns_fallback_when_empty_parse(self, mock_parser):
         service = self._make_service()
 
         result = service.generate_response("hello")
-        assert isinstance(result, str)
+        assert result == "I'm sorry, I couldn't produce a response."
 
     def test_generate_passes_max_tokens(self, mock_parser):
         service = self._make_service()
@@ -257,17 +257,24 @@ class TestGenerateResponse:
         assert len(history) == 2
 
     def test_generate_truncates_history_over_20(self, mock_parser):
+        from openai_harmony import Message, Role
+
         from localtalk.services.llm_adapters import ConversationEvent
 
-        mock_parser.messages = []
+        # Successful final-channel response so the turn is recorded (empty parse
+        # uses the fallback path which does not append history).
+        mock_parser.messages = [Message.from_role_and_content(Role.ASSISTANT, "newest").with_channel("final")]
         service = self._make_service()
-        # Pre-fill with provider-neutral history events.
-        for i in range(18):
+        # Prefill to capacity; one new user+assistant turn (2 events) must drop oldest.
+        for i in range(20):
             service.chat_history.setdefault("default", []).append(ConversationEvent(role="user", content=f"msg{i}"))
 
         service.generate_response("hello")
         history = service.chat_history["default"]
-        assert len(history) <= 20
+        assert len(history) == 20
+        assert history[0].content == "msg2"  # msg0 and msg1 dropped
+        assert history[-1].content == "newest"
+        assert history[-2].content == "hello"
 
     def test_audio_cleanup_after_generation(self, mock_parser):
         service = self._make_service()
