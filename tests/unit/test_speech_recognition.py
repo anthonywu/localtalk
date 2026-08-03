@@ -48,13 +48,16 @@ class TestDtypeConversion:
 
 
 class TestMultidimFlatten:
-    def test_stereo_flattened_to_mono(self):
+    def test_stereo_downmixed_to_mono(self):
+        """Stereo frames must be averaged to mono, not L/R-interleaved via flatten."""
         service = _make_service()
-        audio = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+        # shape (frames, channels): two frames, L/R pairs
+        audio = np.array([[0.1, 0.3], [0.5, 0.7]], dtype=np.float32)
         service.transcribe(audio)
         call_audio = service.model.transcribe.call_args[0][0]
         assert call_audio.ndim == 1
-        assert len(call_audio) == 4
+        assert len(call_audio) == 2  # frames, not frames*channels
+        np.testing.assert_allclose(call_audio, np.array([0.2, 0.6], dtype=np.float32))
 
 
 # ────────────────────────── range normalization ──────────────────────────

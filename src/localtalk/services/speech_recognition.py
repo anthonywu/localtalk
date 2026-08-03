@@ -52,10 +52,13 @@ class SpeechRecognitionService:
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
 
-        # Ensure audio is 1-dimensional
+        # Downmix multi-channel audio to mono. flatten() would interleave L/R
+        # samples and double duration at 16 kHz — Whisper expects mono.
         if audio_data.ndim > 1:
-            self.console.print(f"[yellow]Flattening audio from shape {audio_data.shape}[/yellow]")
-            audio_data = audio_data.flatten()
+            self.console.print(f"[yellow]Downmixing audio from shape {audio_data.shape} to mono[/yellow]")
+            audio_data = np.mean(audio_data, axis=-1).astype(np.float32, copy=False)
+            if audio_data.ndim > 1:
+                audio_data = audio_data.reshape(-1)
 
         # Check audio range and normalize if needed
         max_val = np.abs(audio_data).max()
