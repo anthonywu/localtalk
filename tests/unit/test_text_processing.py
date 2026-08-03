@@ -139,11 +139,8 @@ class TestChunkTextForStreaming:
         text = "One. Two. Three. Four. Five."
         chunks = chunk_text_for_streaming(text, max_chunk_size=3)
         assert len(chunks) >= 2
-        assert (
-            "".join(c.replace(" ", "") for c in chunks).replace(".", "") in text.replace(" ", "").replace(".", "")
-            or True
-        )
-        # Preserve full content when rejoined
+        # Full coverage: rejoin without spaces must equal original without spaces
+        assert "".join(c.replace(" ", "") for c in chunks) == text.replace(" ", "")
         joined = " ".join(chunks)
         for word in ("One", "Two", "Three", "Four", "Five"):
             assert word in joined
