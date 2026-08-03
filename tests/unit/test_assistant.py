@@ -152,20 +152,41 @@ class TestEnhanceSystemPrompt:
         now = datetime.now()
         assert now.strftime("%A") in assistant.config.system_prompt
 
-    def test_does_not_add_if_already_has_datetime(self):
+    def test_narrative_current_date_phrase_still_gets_concrete_datetime(self):
+        """Capability language like 'aware of the current date' must not block injection."""
         config = AppConfig(system_prompt="You know the current date and time.")
         assistant = _make_assistant_stub(config)
-        original = config.system_prompt
         assistant._enhance_system_prompt()
-        # Should not duplicate since "current date" is already present
-        assert assistant.config.system_prompt == original
+        assert "Current date and time:" in assistant.config.system_prompt
+        assert assistant.config.system_prompt.startswith("You know the current date and time.")
 
-    def test_does_not_add_if_already_has_current_time(self):
-        config = AppConfig(system_prompt="Be aware of the current time.")
+    def test_does_not_duplicate_injected_datetime_marker(self):
+        config = AppConfig(system_prompt="Base.\n\nCurrent date and time: Monday, January 1, 2020 at 12:00 PM")
         assistant = _make_assistant_stub(config)
         original = config.system_prompt
         assistant._enhance_system_prompt()
         assert assistant.config.system_prompt == original
+        assert assistant.config.system_prompt.count("Current date and time:") == 1
+
+    def test_default_appconfig_prompt_gets_concrete_datetime(self):
+        """AppConfig default includes 'aware of the current date and time' narrative."""
+        config = AppConfig()
+        assistant = _make_assistant_stub(config)
+        assistant._enhance_system_prompt()
+        assert "Current date and time:" in assistant.config.system_prompt
+
+    def test_language_switch_preserves_datetime(self):
+        """set_session_language must rebuild from the enhanced base, not pre-enhance text."""
+        config = AppConfig(system_prompt="You are a helpful assistant.")
+        assistant = _make_assistant_stub(config)
+        assistant._enhance_system_prompt()
+        assistant._base_system_prompt = assistant.config.system_prompt
+        assistant.llm = MagicMock()
+        assistant.llm_provider = "mlx"
+        assistant._set_session_language("Simplified Chinese")
+        assert "Current date and time:" in assistant.config.system_prompt
+        assert "Simplified Chinese" in assistant.config.system_prompt
+        assert "Current date and time:" in assistant.llm.system_prompt
 
 
 # ────────────────────────── mid-session STT/TTS model swap ──────────────────

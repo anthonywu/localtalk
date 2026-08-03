@@ -41,7 +41,6 @@ class VoiceAssistant:
 
     def __init__(self, config: AppConfig | None = None):
         self.config = config or AppConfig()
-        self._base_system_prompt = self.config.system_prompt
         self.console = Console()
         self.network_status = None
         self.connectivity_cache = ConnectivityCache(
@@ -54,8 +53,11 @@ class VoiceAssistant:
         self.metrics = MetricsStore()
         self._playback_stop = threading.Event()
 
-        # Enhance system prompt with current datetime context
+        # Inject concrete datetime first, then snapshot the base prompt so
+        # language/TTS switches rebuild from the enhanced text (not the bare
+        # pre-enhance string, which would drop "Current date and time: …").
         self._enhance_system_prompt()
+        self._base_system_prompt = self.config.system_prompt
 
         # Initialize services
         self._init_services()
@@ -113,11 +115,11 @@ class VoiceAssistant:
         # Create the enhanced prompt with datetime context
         datetime_context = f"\n\nCurrent date and time: {datetime_str}"
 
-        # If the system prompt doesn't already have datetime info, add it
-        if (
-            "current date" not in self.config.system_prompt.lower()
-            and "current time" not in self.config.system_prompt.lower()
-        ):
+        # Inject the concrete timestamp unless this exact marker is already
+        # present. Narrative phrases like "aware of the current date and time"
+        # (default AppConfig prompt) must not block injection — they are not a
+        # substitute for the actual value the model needs.
+        if "Current date and time:" not in self.config.system_prompt:
             self.config.system_prompt = self.config.system_prompt + datetime_context
             self.console.print(f"[dim]System prompt enhanced with datetime: {datetime_str}[/dim]")
 
