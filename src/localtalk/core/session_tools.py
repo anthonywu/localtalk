@@ -138,6 +138,9 @@ class SessionTools:
         directive = (
             "\n\nFor this session, respond only in Simplified Chinese. Preserve Chinese user input; "
             "do not translate it into English unless the user explicitly requests a translation. "
+            "If the user explicitly asks you to respond in English (or any non-Chinese language), "
+            "you MUST first call the set_tts_backend tool with 'chatterbox_turbo' — otherwise the "
+            "reply is read aloud by the Chinese voice and is unintelligible. "
             "Your replies are read aloud by Chinese text-to-speech: end sentences with full-width "
             "punctuation (。！？) so it can split them for streaming, write numbers, units, and "
             "abbreviations in their spoken Chinese form (for example 百分之五十 instead of 50%), "
@@ -167,13 +170,17 @@ class SessionTools:
                 assistant.console.print(f"[yellow]Warning: could not refresh language instructions: {exc}[/yellow]")
 
     def ensure_voice_for_text(self, text: str) -> bool:
-        """Switch to a Chinese voice if ``text`` is Chinese but the voice is English-only.
+        """Switch voice when ``text`` doesn't match the active voice's language.
 
-        ChatterBox is English-only; feeding it Chinese produces gibberish. If the
-        LLM replied in Chinese (e.g. the user asked for it) without calling
-        ``set_tts_backend`` first, rescue the utterance by switching the session to
-        a Chinese voice before synthesis. ``set_tts_backend`` re-pairs the
-        Whisper input language too, so later Chinese speech transcribes as Chinese.
+        Both directions are rescued — each is unintelligible on the wrong voice:
+        - ChatterBox is English-only; CJK text switches the session to Tingting.
+        - Tingting/Qwen are Chinese voices; a fully-English reply switches back
+          to ChatterBox. Short Latin blips ("OK", "50%") are exempt (Chinese
+          voices say them fine), and any CJK at all keeps the Chinese voice —
+          code-mixed sentences must not strand their CJK span on ChatterBox.
+
+        The reverse rescue has no Whisper guard: English pairs with any
+        checkpoint (the `.en` block only guards the →Chinese direction).
 
         Returns True when ``text`` is safe to synthesize. Returns False when a
         switch was needed but failed (e.g. an English-only Whisper checkpoint
@@ -181,12 +188,22 @@ class SessionTools:
         gibberish; the reply text is already on the console.
         """
         assistant = self.assistant
-        if assistant.config.tts_backend != "chatterbox":
+        has_cjk = any("一" <= ch <= "鿿" for ch in text)  # CJK unified ideographs
+        latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+        backend = assistant.config.tts_backend
+        if backend == "chatterbox":
+            if not has_cjk:
+                return True
+            target, voice_name, detected = "macos_tingting", "Tingting", "Chinese"
+        elif backend in {"apple_speech", "qwen_chinese"}:
+            # ≥8 Latin letters ≈ a real English sentence, not a stray token.
+            if has_cjk or latin < 8:
+                return True
+            target, voice_name, detected = "chatterbox_turbo", "ChatterBox", "English"
+        else:  # macos_say / none: no pairing guarantee defined
             return True
-        if not any("一" <= ch <= "鿿" for ch in text):  # CJK unified ideographs
-            return True
-        assistant.console.print("[yellow]Reply is in Chinese; switching voice to Tingting...[/yellow]")
-        result = assistant._tool_set_tts_backend("macos_tingting")
+        assistant.console.print(f"[yellow]Reply is in {detected}; switching voice to {voice_name}...[/yellow]")
+        result = assistant._tool_set_tts_backend(target)
         if result.get("ok"):
             return True
         assistant.console.print(

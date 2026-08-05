@@ -496,6 +496,16 @@ class TestSttTtsModelHotSwap:
         assert "。！？" in prompt
         assert "百分之五十" in prompt
 
+    def test_chinese_directive_requires_switch_back_for_english(self):
+        """Mirror of the English directive: in a Chinese session the model must
+        switch the voice *before* replying in English, or the Chinese voice
+        reads the English reply unintelligibly."""
+        assistant = _make_assistant_stub()
+        assistant._set_session_language("Simplified Chinese")
+        prompt = assistant.config.system_prompt
+        assert "set_tts_backend" in prompt
+        assert "chatterbox_turbo" in prompt
+
     def test_english_directive_requires_tts_switch_for_other_languages(self):
         """In English mode the model must switch the voice before replying in
         another language, or the English-only voice reads gibberish."""
@@ -575,6 +585,59 @@ class TestEnsureVoiceForText:
         assistant.tts.synthesize.assert_not_called()
         assistant.audio.play_audio.assert_not_called()
 
+    def test_switches_to_chatterbox_for_english_on_chinese_voice(self):
+        """Reverse rescue: a full English reply on Tingting/Qwen is as
+        unintelligible as Chinese on ChatterBox; switch back before speaking."""
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True})
+        assistant._ensure_voice_for_text("Sure, I can continue speaking English.")
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+
+    def test_qwen_voice_also_rescues_english_reply(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "qwen_chinese"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True})
+        assistant._ensure_voice_for_text("Sure, I can continue speaking English.")
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+
+    def test_returns_false_when_english_rescue_fails(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+        assert assistant._ensure_voice_for_text("Sure, I can continue speaking English.") is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "OK",  # short Latin blip: Chinese voice says it fine
+            "50%",  # no letters at all
+            "答案是 42。",  # CJK present: code-mixed stays on the Chinese voice
+            "Let me write 你好 in English.",  # mixed: CJK span must not hit ChatterBox
+        ],
+    )
+    def test_noop_for_blips_and_code_mixed_on_chinese_voice(self, text):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock()
+        assert assistant._ensure_voice_for_text(text) is True
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    def test_speak_sentence_switches_then_speaks_english(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant.tts = MagicMock()
+        assistant.tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
+        assistant.audio = MagicMock()
+        assistant.audio.play_audio.return_value = True
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._speak_sentence("Sure, I can continue speaking English.", {"_respond_start": time.perf_counter()})
+
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+        assert assistant.config.tts_backend == "chatterbox"
+        assert "Sure" in assistant.tts.synthesize.call_args[0][0]
+
     def test_announce_spoken_rescues_chinese_text(self):
         """Mid-turn announcements (e.g. the Cantonese-unsupported apology) can
         also be Chinese on the English-only voice; they get the same rescue."""
@@ -645,6 +708,13 @@ class TestDirectTtsBackendCommand:
             ("切换到中文", "macos_tingting"),
             ("用中文回答", "macos_tingting"),
             ("请说中文吧", "macos_tingting"),
+            ("切换到中文?", "macos_tingting"),
+            # Polite question *form*, but an unambiguous command: the ?-veto
+            # must not kill matched imperatives ("can you" prefixes exist for
+            # exactly these). "可以再讲英文吗?" still falls through (no
+            # imperative opener) and is handled by the LLM + voice rescue.
+            ("Can you switch back to English?", "chatterbox_turbo"),
+            ("Can you speak Chinese?", "macos_tingting"),
         ],
     )
     def test_commands_switch_backend(self, text, backend):

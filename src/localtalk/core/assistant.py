@@ -571,10 +571,6 @@ class VoiceAssistant:
         still call ``set_tts_backend`` itself.
         """
         stripped = text.strip()
-        # Questions are usually *about* a language, not switch commands
-        # ("Do you use Chinese in your answers?", "怎么使用中文输入法？").
-        if stripped.endswith(("?", "？")):
-            return False
         normalized = " ".join(text.casefold().replace("'", "").split())
         wants_tingting = "tingting" in normalized or "ting ting" in normalized or "婷婷" in text
         wants_qwen = "qwen" in normalized
@@ -599,6 +595,11 @@ class VoiceAssistant:
             r"^(?:请|請|麻烦|麻煩|帮我|幫我)?\s*(?:我们|我們)?\s*(?:切换|切換|换成|換成|换|換|说|說|讲|講|用|使用)",
             stripped,
         )
+        # Questions *about* a language die here too ("Do you use Chinese…?",
+        # "你能说中文吗？") — they never open with an imperative verb. Genuine
+        # switch requests keep firing even with a question mark ("Can you
+        # switch to English?"); the can-you/could-you prefixes above exist
+        # exactly for those polite command forms.
         if not (en_command or zh_command):
             return False
 
