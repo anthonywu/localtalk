@@ -9,13 +9,20 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ.setdefault("TQDM_DISABLE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-from localtalk.core.assistant import VoiceAssistant  # noqa: E402
-from localtalk.models.config import AppConfig, ReasoningLevel  # noqa: E402
-
 
 def parse_args():
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Local Voice Assistant with speech recognition, LLM, and TTS")
+    parser = argparse.ArgumentParser(
+        description="Local Voice Assistant with speech recognition, LLM, and TTS",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Upgrade voices:\n"
+            "  Run `localtalk --list-voices` to list installed Apple Speech voices by\n"
+            "  quality tier (Default / Enhanced / Premium), see which one is auto-selected,\n"
+            "  and learn how to download higher-quality voices. LocalTalk auto-selects the\n"
+            "  best installed voice on startup, so installing a Premium voice is enough."
+        ),
+    )
 
     # LLM provider
     parser.add_argument(
@@ -129,6 +136,14 @@ def parse_args():
         help="Test microphone input levels and exit (useful for diagnosing audio issues)",
     )
 
+    # Voice listing (AVSpeechSynthesizer tiers + download guidance)
+    parser.add_argument(
+        "--list-voices",
+        action="store_true",
+        help="List installed Apple Speech voices by quality tier (Default/Enhanced/Premium) "
+        "and exit — marks the auto-selected voice and shows how to upgrade to higher-quality voices",
+    )
+
     # VAD options
     parser.add_argument(
         "--vad-mode",
@@ -210,8 +225,92 @@ def parse_args():
     return parser.parse_args()
 
 
+def _run_list_voices() -> None:
+    """Print installed Apple Speech voices by quality tier + download guidance.
+
+    Mirrors ``--test-mic``: an early-exit info command that does not build the
+    full AppConfig or load any models. ``★`` marks the voice that auto-pick
+    (``voice_identifier=None``) would select for each language.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from localtalk.models.config import AppleSpeechConfig
+    from localtalk.services.apple_speech_tts import list_installed_voices
+
+    console = Console()
+    console.print("\n[bold cyan]🗣️ Apple Speech Voices (AVSpeechSynthesizer)[/bold cyan]\n")
+
+    try:
+        voices = list_installed_voices()
+    except RuntimeError as exc:
+        console.print(f"[red]Cannot enumerate voices: {exc}[/red]")
+        return
+
+    if not voices:
+        console.print("[yellow]No AVSpeechSynthesizer voices installed.[/yellow]")
+        return
+
+    by_lang: dict[str, list] = {}
+    for v in voices:
+        by_lang.setdefault(v.language, []).append(v)
+
+    def auto_pick(lang_voices):
+        natural = [x for x in lang_voices if not x.is_eloquence]
+        pool = natural or lang_voices
+        return max(pool, key=lambda x: x.quality) if pool else None
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("")
+    table.add_column("Name")
+    table.add_column("Tier")
+    table.add_column("Language")
+    table.add_column("Identifier", no_wrap=True)
+    for lang in sorted(by_lang):
+        ordered = sorted(by_lang[lang], key=lambda x: (-x.quality, x.is_eloquence, x.name))
+        best = auto_pick(by_lang[lang])
+        for v in ordered:
+            star = "[green]★[/green]" if v is best else ""
+            name = f"{v.name} [dim](eloquence)[/dim]" if v.is_eloquence else v.name
+            table.add_row(star, name, v.tier, v.language, v.identifier)
+    console.print(table)
+    console.print("\n[green]★[/green] = auto-selected for that language (highest-quality natural voice)\n")
+
+    active_lang = AppleSpeechConfig().language
+    active = auto_pick(by_lang.get(active_lang, []))
+    if active is not None:
+        console.print(f"Active language [bold]{active_lang}[/bold] → [bold]{active.name}[/bold] ({active.tier})")
+
+    if max((v.quality for v in voices), default=1) <= 1:
+        console.print(
+            "\n[yellow]Only Default-tier voices are installed. Higher-quality "
+            "Enhanced/Premium voices may be available from Apple.[/yellow]"
+        )
+        console.print("\n[bold]Upgrade to Enhanced/Premium:[/bold]")
+        console.print("  1. Open System Settings")
+        console.print("  2. Accessibility → Spoken Content → System Voices")
+        console.print("     (some voices also appear under System Settings → Keyboard → Dictation)")
+        console.print("  3. Download an Enhanced or Premium voice, then restart localtalk")
+        console.print("     (it auto-selects the best installed voice — no config change needed)")
+        console.print("\n  Launch System Settings directly:")
+        console.print('  [dim]open -a "System Settings"[/dim]\n')
+
+
 def main():
-    """Main entry point for the CLI."""
+    """Run the CLI and exit cleanly when interrupted at any startup stage."""
+    try:
+        _main()
+    except KeyboardInterrupt:
+        print("\nGoodbye.")
+
+
+def _main():
+    """Main CLI implementation."""
+    # Keep application imports inside ``main``'s interrupt boundary. Importing
+    # MLX can take long enough for an immediate Ctrl+C to otherwise display a
+    # traceback before the assistant's own shutdown handler is installed.
+    from localtalk.models.config import AppConfig, ReasoningLevel
+
     args = parse_args()
 
     # Handle --test-mic early (before loading heavy models)
@@ -236,6 +335,11 @@ def main():
         else:
             console.print("\n[red]Microphone test failed. Please fix audio input before using localtalk.[/red]")
 
+        return
+
+    # Handle --list-voices early (AVSpeechSynthesizer voice tiers + guidance)
+    if args.list_voices:
+        _run_list_voices()
         return
 
     # Build configuration from arguments
@@ -342,6 +446,8 @@ def main():
         config.browser_tools.headed = True
 
     # Create and run assistant
+    from localtalk.core.assistant import VoiceAssistant
+
     assistant = VoiceAssistant(config)
     assistant.run()
 

@@ -26,7 +26,7 @@ class SpeechRecognitionService:
             self.console.print("[dim]Warming up Whisper model...[/dim]")
             dummy_audio = np.zeros(8000, dtype=np.float32)  # 0.5 seconds
             try:
-                _ = model.transcribe(dummy_audio, language="en", temperature=0, fp16=False)
+                _ = model.transcribe(dummy_audio, language=self.config.language, temperature=0, fp16=False)
             except Exception as e:
                 self.console.print(f"[dim]Whisper warmup skipped: {e}[/dim]")
 
@@ -52,10 +52,13 @@ class SpeechRecognitionService:
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
 
-        # Ensure audio is 1-dimensional
+        # Downmix multi-channel audio to mono. flatten() would interleave L/R
+        # samples and double duration at 16 kHz — Whisper expects mono.
         if audio_data.ndim > 1:
-            self.console.print(f"[yellow]Flattening audio from shape {audio_data.shape}[/yellow]")
-            audio_data = audio_data.flatten()
+            self.console.print(f"[yellow]Downmixing audio from shape {audio_data.shape} to mono[/yellow]")
+            audio_data = np.mean(audio_data, axis=-1).astype(np.float32, copy=False)
+            if audio_data.ndim > 1:
+                audio_data = audio_data.reshape(-1)
 
         # Check audio range and normalize if needed
         max_val = np.abs(audio_data).max()
@@ -86,10 +89,17 @@ class SpeechRecognitionService:
 
         # Use simpler transcribe call that worked before VAD
         # Too many parameters might cause issues
+        transcribe_kwargs: dict = {}
+        if self.config.language == "zh":
+            # Bias Whisper toward Simplified script and clean Mandarin
+            # punctuation; zh transcription can otherwise drift into
+            # Traditional characters, which the session directive forbids.
+            transcribe_kwargs["initial_prompt"] = "以下是普通话的简体中文转写。"
         result = self.model.transcribe(
             audio_data,
             language=self.config.language,
             fp16=False,  # Disable FP16 for compatibility
+            **transcribe_kwargs,
         )
 
         elapsed = time.time() - start_time

@@ -133,7 +133,7 @@ class TestMain:
 
         with (
             patch("sys.argv", argv),
-            patch("localtalk.cli.VoiceAssistant", return_value=mock_assistant) as mock_va_class,
+            patch("localtalk.core.assistant.VoiceAssistant", return_value=mock_assistant) as mock_va_class,
         ):
             main()
             return mock_va_class, mock_assistant
@@ -272,24 +272,22 @@ class TestMain:
         """--system-prompt is only used when no prompt file is available at all.
 
         The default prompts/default.txt takes precedence over --system-prompt.
-        We temporarily move the default file so the inline prompt gets used.
+        Redirect cli.__file__ so the default-path lookup misses without
+        touching the real repo file.
         """
-        default_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "default.txt"
-        backup = default_path.read_text() if default_path.exists() else None
-        try:
-            default_path.unlink(missing_ok=True)
-            mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--system-prompt", "Be concise"])
-            config = mock_va_class.call_args[0][0]
-            assert config.system_prompt == "Be concise"
-        finally:
-            if backup is not None:
-                default_path.write_text(backup)
+        fake_cli = tmp_path / "src" / "localtalk" / "cli.py"
+        fake_cli.parent.mkdir(parents=True)
+        fake_cli.write_text("# stub\n")
+        monkeypatch.setattr("localtalk.cli.__file__", str(fake_cli))
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk", "--system-prompt", "Be concise"])
+        config = mock_va_class.call_args[0][0]
+        assert config.system_prompt == "Be concise"
 
     def test_main_missing_prompt_file_returns_early(self):
         """A missing --system-prompt-file should print an error and return without creating the assistant."""
         with (
             patch("sys.argv", ["localtalk", "--system-prompt-file", "/nonexistent/prompt.txt"]),
-            patch("localtalk.cli.VoiceAssistant") as mock_va,
+            patch("localtalk.core.assistant.VoiceAssistant") as mock_va,
         ):
             main()
         assert not mock_va.called
@@ -298,7 +296,7 @@ class TestMain:
         """--test-mic should not create a VoiceAssistant."""
         with (
             patch("sys.argv", ["localtalk", "--test-mic"]),
-            patch("localtalk.cli.VoiceAssistant") as mock_va,
+            patch("localtalk.core.assistant.VoiceAssistant") as mock_va,
             patch("localtalk.services.audio.AudioService") as mock_audio_cls,
         ):
             mock_audio = MagicMock()
@@ -308,22 +306,24 @@ class TestMain:
         assert not mock_va.called
         assert mock_audio.test_microphone.called
 
+    def test_main_interrupt_during_startup_prints_clean_goodbye(self, capsys):
+        with patch("localtalk.cli._main", side_effect=KeyboardInterrupt):
+            main()
+
+        assert capsys.readouterr().out == "\nGoodbye.\n"
+
     def test_main_default_prompt_file_loaded(self, tmp_path, monkeypatch):
         """When no --system-prompt or --system-prompt-file, default prompts/default.txt is loaded."""
         default_prompt = "Default prompt from file."
-        # The code looks for prompts/default.txt relative to cli.py's location
-        # which is src/localtalk/cli.py → parent.parent.parent / prompts / default.txt
-        prompts_dir = Path(__file__).resolve().parent.parent.parent / "prompts"
-        original_content = None
-        default_path = prompts_dir / "default.txt"
-        if default_path.exists():
-            original_content = default_path.read_text()
-
-        try:
-            default_path.write_text(default_prompt)
-            mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
-            config = mock_va_class.call_args[0][0]
-            assert config.system_prompt == default_prompt
-        finally:
-            if original_content is not None:
-                default_path.write_text(original_content)
+        # Mirror package layout under tmp so Path(__file__).parent×3/prompts works
+        # without rewriting the real repo prompts/default.txt.
+        fake_cli = tmp_path / "src" / "localtalk" / "cli.py"
+        fake_cli.parent.mkdir(parents=True)
+        fake_cli.write_text("# stub\n")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "default.txt").write_text(default_prompt)
+        monkeypatch.setattr("localtalk.cli.__file__", str(fake_cli))
+        mock_va_class, _ = self._run_main_with_mocks(["localtalk"])
+        config = mock_va_class.call_args[0][0]
+        assert config.system_prompt == default_prompt

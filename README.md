@@ -1,28 +1,57 @@
 # 💻🎤🔊 localtalk
 
-A privacy-first voice assistant that runs entirely offline on Apple Silicon, perfect for travelers, privacy-conscious users, and anyone who values their data sovereignty. No accounts, no cloud services, no tracking - just powerful AI that respects your privacy.
+**A voice assistant that never leaves your Mac.**
 
-Plenty of alternative projects exist, but `localtalk` aims for the best one liner onboarding experience, and prioritizes direct usage rather than acting as a `import`able library for other wrappers. It also has no agenda to upgrade you to a SaaS SDK or service.
+Listens, reasons, and speaks entirely offline on Apple Silicon. No accounts. No API keys. No cloud required after first model download.
 
-> **Status:** Alpha software (`0.6.0`), but as of August 2026 it is rather usable. It works end-to-end — speech recognition, reasoning, and natural TTS, all offline — though it is not yet polished for general use. We believe we are one or two generations of open-weight models away from it being generally usable. The default assistant persona and a datetime-aware system prompt ship in [`prompts/default.txt`](prompts/default.txt), and both are overridable via CLI flags.
+```bash
+uv tool install localtalk   # or: uvx localtalk
+localtalk
+```
 
-## Why This Project Exists
+Built for people who want a **full local voice product** they can run, inspect, fork, and teach with — not a library to wrap, and not a free trial for someone else's SaaS. Core path: speech in → model thinks → speech out. Optional tools (web search, browser, offline knowledge packs) are progressive power features under your control — say "disable web" anytime.
 
-1. **Technology preview** - While the tech isn't perfect yet, we can build something functional right now that respects your privacy and runs entirely offline.
+**Who it's for.** Privacy-minded Mac users comfortable in a terminal; DIYers, educators, and parents who treat localtalk as a **teaching tool** (run it, read the prompts, fork the code, learn how the loop works). Kids are in scope with **parental guidance** — this is not a cloud babysitter or content-filter product. Also useful offline for travel once models and knowledge packs are cached.
 
-2. **As a vibe check on offline-first AI** - How realistic is it to avoid cloud services like OpenAI and ElevenLabs? This project explores what's possible with local models and helps identify the gaps.
+> **Status:** Beta (`0.9.0`) — end-to-end usable: speech recognition, reasoning, and natural TTS, all offline. Still tracking open-model quality; we expect one or two more model generations before this feels fully polished for everyone. Default persona ships in [`prompts/default.txt`](prompts/default.txt) (overridable via CLI).
 
-3. **Future-proofing for real-time local AI** - One day soon, these models and consumer computers will be capable of real-time TTS that rivals cloud services. When that day comes, this library will be ready to leverage those improvements immediately.
+## Design Philosophy
 
-4. **Abundant access** - We want AI assistance to be effectively free to use: something we can give to students and children without worrying that curiosity or experimentation is quietly racking up API bills. Our long-term goal is for using LocalTalk to cost little more than the electricity required to run it.
+LocalTalk has a deliberate scope and a few opinions that shape how it's built.
+
+**Apple-native, end to end.** All Apple platform capabilities are in scope. Where an Apple-native API or framework — AVFoundation Speech Synthesis, on-device Apple Foundation Models, the Speech framework, system voices like *Tingting* — gives a better local experience than a cross-platform library, LocalTalk prefers it. This is an unapologetically Apple-native project: Apple APIs win on macOS by default; Linux is a secondary target, not a portability mandate.
+
+**macOS-first, latest-first.** LocalTalk's primary target is macOS on Apple Silicon. We develop against and optimize for the newest macOS release, and adopt new platform features (e.g. Apple Foundation Models on macOS 27) as soon as they land. Older OS versions get **best-effort fallbacks** where they're cheap, but are not a release blocker: if a feature needs the latest OS, we'll call that out clearly rather than backport it. Linux (CUDA backend) is in scope, but is not prioritized — macOS is where we focus our effort.
+
+**Terminal-first, terminal-only.** LocalTalk lives in the terminal, and a GUI is explicitly **out of scope**. Keeping the interface textual keeps the iteration loop tight: the same CLI a human drives is what a coding assistant drives during development, and what runs the project's tests, evals, and other verifications. A GUI would add surface area, slow that loop, and pull focus from the core STT/LLM/TTS work. If you want a GUI, wrap the CLI yourself — it's a stable boundary, not a thing we plan to build.
+
+**Built for tinkerers, teachers, and learners.** Understand it, modify it, teach with it — not just consume it. Zero accounts, zero API keys, one-command install, prompts and tools on disk. Great for classrooms and home learning **with an adult in the loop**; parental guidance is expected when kids use it.
+
+**Marketing surfaces follow Apple HIG fundamentals.** The project site (`docs/index.html`) prioritizes clarity, deference, and depth: system typography, sufficient contrast, light/dark via system appearance, reduced-motion support, visible focus rings, and 44pt-class touch targets. It is an independent project and is not affiliated with Apple Inc.
+
+## Why Offline
+
+Most voice assistants are rented: your words go to someone else's servers, and curiosity quietly costs tokens. localtalk is **owned** — private by default, free after electricity once models are cached, and ready to absorb the next generation of open models the day they ship. Optional online tools exist when you want them; turn Wi‑Fi off (or say "disable web") and the core voice loop still works.
 
 ### Why Not Use Apple's Built-in "Say" Command?
 
-We deliberately chose not to use macOS's built-in `say` command for text-to-speech. While it's readily available and requires no setup, the voice quality is too robotic to meet today's user expectations. After being exposed to natural-sounding AI voices from services like ElevenLabs and OpenAI, users expect conversational AI to sound human-like. The `say` command's 1990s-era voice synthesis would make the assistant feel outdated and diminish the user experience, so it wasn't worth implementing as an option.
+LocalTalk uses ChatterBox Turbo for its default English voice. For Chinese, it can use macOS's built-in, free **Tingting** voice with no model download. The larger local Qwen3-TTS model remains available as an optional higher-quality Chinese voice.
 
-Apple's newer [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) offers much higher quality voices that could be a great fit for this project. However, we're waiting for proper Python library support to integrate it. Once Python bindings become available, we'll add support for these modern Apple voices as another local TTS option.
+Tingting is rendered through Apple's modern [Speech Synthesis API](https://developer.apple.com/documentation/avfoundation/speech-synthesis) (`AVSpeechSynthesizer`) via [PyObjC](https://pyobjc.readthedocs.io/), which talks to the synthesizer in-process and delivers float32 PCM directly — no per-sentence `say` subprocess, no temp AIFF file — and unlocks Apple's enhanced and eloquence voice tiers. The legacy `say` command (`macos_say` backend) is retained as a selectable fallback. To use the modern voices, `pyobjc-framework-AVFoundation` is now an installed dependency.
 
 Built with speech recognition (Whisper), language model processing (gpt-oss/MLX), and text-to-speech synthesis (ChatterBox Turbo), LocalTalk gives you the convenience of modern AI assistants without sacrificing your privacy or requiring internet connectivity.
+
+### Higher-Quality Voices
+
+**Want better Chinese speech?** Apple ships `AVSpeechSynthesizer` voices in three quality tiers — **Default**, **Enhanced**, and **Premium** — where Enhanced/Premium sound noticeably more natural but must be downloaded separately. LocalTalk auto-selects the highest-quality *natural* voice installed for the configured language (eloquence/character voices are deprioritized). So once you download a Premium Tingting, LocalTalk uses it automatically on the next start — **no config change needed**.
+
+To see what's installed and get step-by-step download guidance, run:
+
+```bash
+localtalk --list-voices
+```
+
+**To upgrade:** open **System Settings → Accessibility → Spoken Content → System Voices** (some voices also appear under System Settings → Keyboard → Dictation) and install an Enhanced or Premium voice, then restart LocalTalk. To pin a specific voice explicitly instead of auto-select, set `voice_identifier` in `AppleSpeechConfig` (the identifier is shown by `--list-voices`).
 
 ## Why "LocalTalk"?
 
@@ -37,22 +66,28 @@ It's the perfect name for an offline voice assistant that embodies Apple's tradi
 
 ## Features
 
-- 🎤 **Speech Recognition**: Convert speech to text using OpenAI Whisper
-- 🎙️ **Voice Activity Detection**: Automatic speech detection with Silero VAD — auto-listen by default, no button-pressing required
-- 📊 **Live Recording Waveform**: Real-time Unicode waveform of mic input levels while you speak
-- ⚡ **Sentence-streamed speech**: Speaks the first finished sentence as soon as the model produces it — no waiting for the full reply to synthesize
-- 📈 **Local turn metrics**: Each turn appends latency stats to `~/.cache/localtalk/metrics/turns.jsonl` (STT/LLM/TTS, time-to-first-audio); pass `--stats` to print them live
-- 🔔 **Earcons**: Quiet listen / heard / speak / error tones; press **Esc** during a reply to stop remaining speech
-- 🤖 **Language Model**: Defaults to **gpt-oss via MLX**. On **macOS 27+ (Golden Gate)**, opt into Apple **Foundation Models** (`SystemLanguageModel`, on-device Apple Intelligence) with `--llm-provider auto` or `--llm-provider apple`.
-- 🧠 **Mid-Session Reasoning Control**: Ask the assistant to "think harder" or "think faster" and it adjusts its own reasoning level via a Harmony tool call — no restart needed
-- 📚 **Offline Knowledge Packs**: Ask it to download Simple English Wikipedia (or Wiktionary, etc.) into `~/.cache/localtalk/knowledge`, then query those packs offline
-- 🌐 **Online tools (auto)**: When you're online, web search + local browser tools turn on automatically; say "enable web" / "disable web" anytime mid-session
-- 🔊 **High-Quality TTS**: ChatterBox Turbo for natural-sounding speech synthesis
-- 🗣️ **TTS-Ready Output**: The system prompt forces fully speakable text — abbreviations, units, symbols, and numbers are spelled out so TTS narrates every response verbatim, with no markdown leaking into audio
-- 💬 **Dual Input Modes**: Type or speak your queries (press Esc during auto-listen to switch to keyboard, Esc again to go back to voice)
-- 🕒 **Datetime-Aware Persona**: A warm default persona in [`prompts/default.txt`](prompts/default.txt), automatically augmented with the current date and time so the assistant knows "today"
-- 💾 **Fully Offline**: No internet connection required after setup (you can even turn off WiFi)
-- 🔒 **100% Private**: Your conversations never leave your device
+### Voice loop (the product)
+
+- 🎤 **Speech recognition** — OpenAI Whisper, local
+- 🎙️ **Auto-listen VAD** — Silero detects start/stop; no button-pressing by default
+- ⚡ **Sentence-streamed speech** — first finished sentence spoken as soon as the model produces it
+- 🔊 **Local TTS** — ChatterBox Turbo (English); free native macOS Tingting + optional Qwen3-TTS (Chinese)
+- 🗣️ **TTS-ready output** — speakable text only (no markdown leaking into audio)
+- 💬 **Type or speak** — Esc toggles keyboard ↔ voice during auto-listen
+- 🔔 **Earcons + Esc stop** — quiet listen/heard/speak/error cues; Esc stops remaining speech mid-reply
+- 📊 **Live mic waveform** + optional **turn metrics** (`--stats`, `~/.cache/localtalk/metrics/turns.jsonl`)
+
+### Local intelligence
+
+- 🤖 **LLM** — defaults to **gpt-oss via MLX**; on **macOS 27+**, opt into Apple **Foundation Models** with `--llm-provider auto` or `apple`
+- 🧠 **Mid-session reasoning** — say "think harder" / "think faster" without restarting
+- 🕒 **Datetime-aware persona** — warm default in [`prompts/default.txt`](prompts/default.txt), overridable via CLI
+
+### Knowledge & tools (progressive power features)
+
+- 📚 **Offline knowledge packs** — download Simple English Wikipedia (etc.) into cache, query offline
+- 🌐 **Online tools under your control** — when online, web search + local browser can turn on; say "enable web" / "disable web" anytime. Core STT/LLM/TTS never need the network after setup
+- 💾 **Private by default** — conversations stay on device unless you enable tools that use the network
 
 ## Requirements
 
@@ -76,8 +111,8 @@ brew install libsndfile
 
 **Platform Support:**
 
-- macOS (Apple Silicon): ✅ Fully supported as first class platform.
-- Linux / CUDA backend: 🚧 Planned (see roadmap below).
+- macOS (Apple Silicon): ✅ Fully supported as first class platform. We optimize for the latest macOS release; older releases get best-effort fallbacks (see [Design Philosophy](#design-philosophy)).
+- Linux / CUDA backend: 🟡 In scope, not prioritized (see [Design Philosophy](#design-philosophy)).
 - Windows: 🤷🏼‍♂️ Would consider, but not seriously.
 
 ## Installation - with uv
@@ -92,6 +127,8 @@ uvx localtalk
 ```
 
 ## Contributor/Developer Setup
+
+> **Building tools or extending the assistant?** Read [`TOOLS.md`](./TOOLS.md) — a beginner-friendly guide to how the AI's tools work and how to add your own (no AI dev experience required).
 
 1. **Clone the repository**:
 
@@ -179,6 +216,12 @@ localtalk --no-tts
 localtalk --save-audio
 ```
 
+During a session, say "switch to the Chinese voice" or "let's switch to Chinese" to switch to the free native macOS
+**Tingting** voice. It needs no model download. Say "use Qwen Chinese voice" to use the optional local
+`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit` model instead. Say "switch to the fast English voice"
+to return to ChatterBox Turbo. A Chinese voice switch also sets Whisper's input language to Chinese (`zh`) so
+Chinese speech is transcribed as Chinese rather than forced through the English decoder.
+
 ### Disabling Progress Bars
 
 If you prefer to disable progress bar output during model loading, set the environment variable:
@@ -231,10 +274,11 @@ localtalk
 - `--system-prompt TEXT`: Custom system prompt for the LLM (inline)
 - `--system-prompt-file PATH`: Path to a text file with a custom system prompt (takes precedence over `--system-prompt`; if neither is given, the bundled [`prompts/default.txt`](prompts/default.txt) is used)
 
-**Diagnostics:**
+**Diagnostics & info:**
 
 - `--stats`: Show timing statistics for the STT, LLM, and TTS steps each turn
 - `--test-mic`: Test microphone input levels and exit (useful for diagnosing audio issues before running the assistant)
+- `--list-voices`: List installed Apple Speech voices by quality tier (Default/Enhanced/Premium) and exit — marks the auto-selected voice and shows how to **upgrade** to higher-quality voices (see [Higher-Quality Voices](#higher-quality-voices))
 
 ### Example Configurations
 
@@ -267,7 +311,7 @@ Everything runs locally on your Mac!
 
 - ✅ **Whisper**: Runs locally, no API key needed
 - ✅ **MLX-LM**: Runs locally on Apple Silicon, no API key needed
-- ✅ **ChatterBox Turbo**: Runs locally, no API key needed
+- ✅ **ChatterBox Turbo and macOS Tingting**: Run locally, no API key needed
 
 ## Advanced Usage
 
@@ -401,11 +445,17 @@ MIT License - see LICENSE file for details.
 - OpenAI gpt-oss and the `openai-harmony` library for the gpt-oss adapter's reasoning and tool-calling protocol
 - Resemble AI for ChatterBox TTS
 
+## AI Usage Disclosure
+
+This project was built with substantial assistance from AI coding models and agent harnesses. Both closed and open-weight models were used, including OpenAI GPT, Anthropic Claude, Moonshot Kimi, Z.ai GLM, and SpaceXAI Grok, across multiple harnesses such as Codex, Claude Code, OpenCode, Grok Build, and pi.
+
+Humans remain responsible for design decisions, review, and the final state of the code. AI was used as a force multiplier for implementation, refactoring, tests, and documentation — not as a substitute for engineering judgment.
+
 ## Future Plans & Roadmap
 
 ### Language Support
 
-Currently, LocalTalk supports English (American and British accents). **Chinese language support is coming next**, with other major world languages to follow. The underlying models (Whisper, gpt-oss, and ChatterBox) already have multilingual capabilities - we just need to wire up the language detection and configuration.
+LocalTalk supports English by default and can switch a session to Simplified Chinese with Tingting or Qwen3-TTS. Other major world languages are future work.
 
 **Contributors welcome!** If you'd like to help add support for your language, please check our [Issues](https://github.com/anthonywu/localtalk/issues) page or submit a PR. Language additions mainly involve:
 
@@ -444,6 +494,6 @@ Startup probes connectivity (unless `--skip-network-probe`). **Default policy is
 - **Thinking Machines models**: Evaluate open-weight Inkling models and future Interaction Models as Apple-Silicon-friendly local runtimes emerge. Inkling's native audio input, controllable thinking effort, and tool use are a strong conceptual fit; LocalTalk's provider-adapter boundary can support it alongside the current gpt-oss/Harmony path, rather than as a drop-in model swap.
 - **Voice profiles**: Save and switch between different voice configurations
 - **Plugin system**: Extend functionality with custom modules
-- **Platform support**: Linux support (P2), Windows consideration (P3)
+- **Platform support**: Linux (CUDA backend) is in scope but not prioritized; Windows is only a consideration. A GUI is **out of scope by design** — see [Design Philosophy](#design-philosophy).
 
 > Already shipped: multi-turn conversation history (per-session context), mid-session reasoning control, and a datetime-aware default persona.

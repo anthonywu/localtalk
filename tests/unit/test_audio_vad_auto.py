@@ -322,11 +322,10 @@ class TestRecordWithVadAutomaticMocked:
     def test_interrupt_check_stops_recording(self):
         """External interrupt (e.g. Esc key) stops recording immediately."""
         service = self._make_service()
-        # Feed lots of chunks but interrupt after the first one
-        speech_chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(3)]
-        silence_chunks = [np.zeros(512, dtype=np.float32) for _ in range(64)]
-        chunks = speech_chunks + silence_chunks
-        vad_probs = [0.9, 0.9, 0.9] + [0.0] * 64
+        # Continuous speech only — no trailing silence — so the callback never
+        # sets should_stop; the polling loop must honor interrupt_check.
+        chunks = [np.ones(512, dtype=np.float32) * 0.3 for _ in range(20)]
+        vad_probs = [0.9] * 20
 
         call_count = [0]
 
@@ -336,9 +335,11 @@ class TestRecordWithVadAutomaticMocked:
 
         result = self._run_with_scripted_chunks(service, chunks, vad_probs, interrupt_check=interrupt)
 
-        # Interrupt happens early; speech segments may or may not be captured
-        # depending on timing, but the function should return without hanging.
         assert isinstance(result, np.ndarray)
+        assert call_count[0] >= 2
+        # Interrupt should abort while speech is in flight; result is the audio
+        # already buffered (non-empty) rather than hanging until max duration.
+        assert len(result) > 0
 
     def test_speech_at_initial_deadline_boundary_is_not_cut_off(self):
         """Speech starting just before the initial timeout should not be cut off."""

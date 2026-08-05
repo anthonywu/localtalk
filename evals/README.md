@@ -7,7 +7,7 @@ tool and produced an appropriate spoken answer.
 
 ## Start here
 
-`cases.jsonl` contains the first twelve high-value scenarios. Each line
+`cases.jsonl` contains the high-value scenarios. Each line
 describes one user request, its initial session state, and observable pass
 criteria. Do not score private reasoning. Score only the tool trace, resulting
 session state, and final spoken response.

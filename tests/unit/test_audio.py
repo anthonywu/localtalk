@@ -271,7 +271,7 @@ class TestPlayAudio:
     def test_play_calls_wait(self, fake_sd):
         """Successful playback drains the stream via wait()."""
         service = _make_audio_service(fake_sd)
-        # Long enough for the Live loop to take at least one tick path
+        # Long enough for the polling loop to take at least one tick path
         audio = np.zeros(512, dtype=np.float32)
         audio[0] = 0.5
         service.play_audio(audio, sample_rate=16000)
@@ -287,7 +287,6 @@ class TestPlayAudio:
             audio,
             sample_rate=16000,
             fade_ms=0.0,
-            show_waveform=False,
             interrupt_check=lambda: True,
         )
 
@@ -316,27 +315,6 @@ class TestEarcons:
         service.play_earcon("unknown")
 
         fake_sd.play.assert_not_called()
-
-
-# ────────────────────────── RMS silence detection ──────────────────────────
-
-
-class TestSilenceDetection:
-    def test_rms_below_threshold_is_silence(self, fake_sd):
-        """RMS below silence_threshold increments silence counter."""
-        service = _make_audio_service(fake_sd)
-
-        threshold = service.config.silence_threshold  # 0.01
-
-        # Simulate a quiet chunk
-        quiet = np.full((512,), 0.001, dtype=np.float32)
-        rms = np.sqrt(np.mean(quiet**2))
-        assert rms < threshold
-
-        # Simulate a loud chunk
-        loud = np.full((512,), 0.5, dtype=np.float32)
-        rms_loud = np.sqrt(np.mean(loud**2))
-        assert rms_loud >= threshold
 
 
 # ────────────────────────── VAD guards ──────────────────────────

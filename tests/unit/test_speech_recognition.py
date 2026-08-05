@@ -48,13 +48,16 @@ class TestDtypeConversion:
 
 
 class TestMultidimFlatten:
-    def test_stereo_flattened_to_mono(self):
+    def test_stereo_downmixed_to_mono(self):
+        """Stereo frames must be averaged to mono, not L/R-interleaved via flatten."""
         service = _make_service()
-        audio = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+        # shape (frames, channels): two frames, L/R pairs
+        audio = np.array([[0.1, 0.3], [0.5, 0.7]], dtype=np.float32)
         service.transcribe(audio)
         call_audio = service.model.transcribe.call_args[0][0]
         assert call_audio.ndim == 1
-        assert len(call_audio) == 4
+        assert len(call_audio) == 2  # frames, not frames*channels
+        np.testing.assert_allclose(call_audio, np.array([0.2, 0.6], dtype=np.float32))
 
 
 # ────────────────────────── range normalization ──────────────────────────
@@ -118,6 +121,22 @@ class TestTranscriptionResult:
         audio = np.array([0.0, 0.5], dtype=np.float32)
         service.transcribe(audio)
         assert service.model.transcribe.call_args[1]["fp16"] is False
+
+    def test_zh_transcribe_pins_simplified_script(self):
+        model = MagicMock()
+        model.transcribe.return_value = {"text": "你好"}
+        service = _make_service(model)
+        service.config.language = "zh"
+        service.transcribe(np.array([0.0, 0.5], dtype=np.float32))
+        assert service.model.transcribe.call_args[1]["initial_prompt"] == "以下是普通话的简体中文转写。"
+
+    def test_non_zh_transcribe_omits_initial_prompt(self):
+        model = MagicMock()
+        model.transcribe.return_value = {"text": "hello"}
+        service = _make_service(model)
+        service.config.language = "en"
+        service.transcribe(np.array([0.0, 0.5], dtype=np.float32))
+        assert "initial_prompt" not in service.model.transcribe.call_args[1]
 
     def test_transcribe_propagates_exception(self):
         model = MagicMock()

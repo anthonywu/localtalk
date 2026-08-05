@@ -8,9 +8,23 @@ import pytest
 
 from localtalk.models.config import AppConfig
 from localtalk.services.apple_llm import AppleFoundationModelService, resolve_llm_provider
-from localtalk.services.foundation_models_helper import is_golden_gate_or_newer, macos_version_tuple
+from localtalk.services.foundation_models_helper import (
+    bundled_swift_source,
+    is_golden_gate_or_newer,
+    macos_version_tuple,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def test_bundled_swift_source_is_package_copy():
+    """The helper source ships inside the package; no repo-root fallback."""
+    path = bundled_swift_source()
+    assert path.is_file()
+    # <pkg>/native/foundation_models/main.swift — the single canonical copy
+    assert path.name == "main.swift"
+    assert path.parents[1].name == "native"
+    assert path.parents[2].name == "localtalk"
 
 
 def test_macos_version_tuple_parses(monkeypatch):
@@ -73,7 +87,7 @@ def test_online_instructions_search_without_confirmation():
     svc = _make_apple_svc_for_generate()
     svc.web_tools.enabled = True
 
-    assert "never ask whether to search" in svc._full_instructions()
+    assert "never ask whether they want you to search" in svc._full_instructions().lower()
     assert "Do not ask for approval" in svc._full_instructions()
 
 
@@ -182,17 +196,23 @@ def test_compose_prompt_includes_history():
 
 
 def test_foundation_models_process_timeout():
+    """Timeout path must fire without a multi-second wall-clock sleep.
+
+    The reader blocks on an Event (released after the assertion) so
+    ``queue.get(timeout=...)`` is what drives the failure, not ``time.sleep``.
+    """
+    import threading
+
     from localtalk.services.foundation_models_helper import FoundationModelsProcess
 
     proc = FoundationModelsProcess.__new__(FoundationModelsProcess)
     proc.binary = MagicMock()
     proc._lock = __import__("threading").Lock()
+    release_reader = threading.Event()
 
     class FakeStdout:
         def readline(self):
-            import time
-
-            time.sleep(2.0)
+            release_reader.wait(timeout=5.0)
             return ""
 
     class FakeProc:
@@ -209,10 +229,13 @@ def test_foundation_models_process_timeout():
     proc.start = lambda: None  # type: ignore[method-assign]
     proc._ensure = lambda: fake  # type: ignore[method-assign]
 
-    events = list(proc.iter_events({"cmd": "status"}, timeout_s=0.2))
-    assert events
-    assert events[-1].get("ok") is False
-    assert "timed out" in (events[-1].get("error") or "").lower()
+    try:
+        events = list(proc.iter_events({"cmd": "status"}, timeout_s=0.05))
+        assert events
+        assert events[-1].get("ok") is False
+        assert "timed out" in (events[-1].get("error") or "").lower()
+    finally:
+        release_reader.set()
 
 
 def _make_apple_svc_for_generate(*, max_tool_rounds: int = 3) -> AppleFoundationModelService:

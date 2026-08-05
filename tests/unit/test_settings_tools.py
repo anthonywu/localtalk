@@ -15,8 +15,10 @@ from localtalk.services.tools.settings import (
     make_set_generation_tool,
     make_set_show_reasoning_tool,
     make_set_stt_model_tool,
+    make_set_tts_backend_tool,
     make_set_tts_model_tool,
     make_set_vad_mode_tool,
+    make_voice_help_tool,
 )
 
 pytestmark = pytest.mark.unit
@@ -129,6 +131,7 @@ class TestRegistryIncludesSettings:
                 "set_stats": lambda e: {"ok": True, "show_stats": e},
                 "set_tts": lambda e: {"ok": True, "tts_enabled": e},
                 "set_tts_model": lambda model_id: {"ok": True, "model_id": model_id},
+                "set_tts_backend": lambda backend: {"ok": True, "backend": backend},
                 "set_stt_model": lambda model, **kw: {"ok": True, "model": model},
                 "set_vad_mode": lambda mode, **kw: {"ok": True, "vad_mode": mode},
             }
@@ -137,6 +140,7 @@ class TestRegistryIncludesSettings:
         assert "set_stats" in names
         assert "set_tts" in names
         assert "set_tts_model" in names
+        assert "set_tts_backend" in names
         assert "set_stt_model" in names
         assert "set_vad_mode" in names
 
@@ -162,3 +166,34 @@ class TestSttTtsModelTools:
         tool = make_set_tts_model_tool(lambda model_id: {"ok": True, "model_id": model_id})
         assert tool.handler({})["ok"] is False
         assert tool.handler({"model_id": "mlx-community/chatterbox-turbo-4bit"})["ok"] is True
+
+    def test_tts_backend_tool_limits_backends(self):
+        calls = []
+        tool = make_set_tts_backend_tool(lambda backend: calls.append(backend) or {"ok": True, "backend": backend})
+        assert tool.handler({"backend": "qwen_chinese"})["ok"] is True
+        assert tool.handler({"backend": "macos_tingting"})["ok"] is True
+        assert calls == ["qwen_chinese", "macos_tingting"]
+        assert tool.handler({"backend": "anything_else"})["ok"] is False
+
+
+class TestVoiceHelpTool:
+    def test_handler_calls_callback_and_returns_payload(self):
+        payload = {"ok": True, "spoken": "Premium voices available.", "tier": "Default"}
+        tool = make_voice_help_tool(lambda: payload)
+        assert tool.name == "voice_help"
+        # voice_help takes no arguments — handler ignores args
+        assert tool.handler({"ignored": True}) is payload
+
+    def test_spoken_fallback_reads_spoken_field(self):
+        tool = make_voice_help_tool(lambda: {"ok": True, "spoken": "You're on Default."})
+        assert tool.spoken_fallback({"ok": True, "spoken": "You're on Default."}, {}) == "You're on Default."
+
+    def test_spoken_fallback_handles_missing_result(self):
+        tool = make_voice_help_tool(lambda: {"ok": False})
+        assert "couldn't" in tool.spoken_fallback({"ok": False}, {})
+
+    def test_schema_has_no_required_parameters(self):
+        tool = make_voice_help_tool(lambda: {"ok": True, "spoken": "x"})
+        params = tool.description.parameters
+        assert params["properties"] == {}
+        assert params["required"] == []

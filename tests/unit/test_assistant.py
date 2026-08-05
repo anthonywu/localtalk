@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import time
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -10,8 +11,9 @@ import numpy as np
 import pytest
 from rich.console import Console
 
-from localtalk.core.assistant import _PlainTextRenderer, _strip_markdown
 from localtalk.models.config import AppConfig
+from localtalk.utils.text_processing import _PlainTextRenderer
+from localtalk.utils.text_processing import strip_markdown as _strip_markdown
 
 pytestmark = pytest.mark.unit
 
@@ -111,6 +113,7 @@ def _make_assistant_stub(config=None):
     assistant.metrics = MetricsStore()
     assistant._playback_stop = __import__("threading").Event()
     assistant._tts_cached = None
+    assistant._tts_cached_backend = "chatterbox"
     return assistant
 
 
@@ -125,6 +128,20 @@ def _llm_returns(text: str):
     return _side_effect
 
 
+def _tts_switch_side_effect(assistant):
+    """Mimic ``_tool_set_tts_backend``'s real contract: a successful switch
+    retargets ``config.tts_backend``, which ``_ensure_voice_for_text`` keys off."""
+
+    def _switch(requested: str) -> dict:
+        assistant.config.tts_backend = {
+            "macos_tingting": "apple_speech",
+            "qwen_chinese": "qwen_chinese",
+        }.get(requested, "chatterbox")
+        return {"ok": True, "backend": requested}
+
+    return _switch
+
+
 class TestEnhanceSystemPrompt:
     def test_adds_datetime_to_prompt(self):
         config = AppConfig(system_prompt="You are a helpful assistant.")
@@ -135,20 +152,41 @@ class TestEnhanceSystemPrompt:
         now = datetime.now()
         assert now.strftime("%A") in assistant.config.system_prompt
 
-    def test_does_not_add_if_already_has_datetime(self):
+    def test_narrative_current_date_phrase_still_gets_concrete_datetime(self):
+        """Capability language like 'aware of the current date' must not block injection."""
         config = AppConfig(system_prompt="You know the current date and time.")
         assistant = _make_assistant_stub(config)
-        original = config.system_prompt
         assistant._enhance_system_prompt()
-        # Should not duplicate since "current date" is already present
-        assert assistant.config.system_prompt == original
+        assert "Current date and time:" in assistant.config.system_prompt
+        assert assistant.config.system_prompt.startswith("You know the current date and time.")
 
-    def test_does_not_add_if_already_has_current_time(self):
-        config = AppConfig(system_prompt="Be aware of the current time.")
+    def test_does_not_duplicate_injected_datetime_marker(self):
+        config = AppConfig(system_prompt="Base.\n\nCurrent date and time: Monday, January 1, 2020 at 12:00 PM")
         assistant = _make_assistant_stub(config)
         original = config.system_prompt
         assistant._enhance_system_prompt()
         assert assistant.config.system_prompt == original
+        assert assistant.config.system_prompt.count("Current date and time:") == 1
+
+    def test_default_appconfig_prompt_gets_concrete_datetime(self):
+        """AppConfig default includes 'aware of the current date and time' narrative."""
+        config = AppConfig()
+        assistant = _make_assistant_stub(config)
+        assistant._enhance_system_prompt()
+        assert "Current date and time:" in assistant.config.system_prompt
+
+    def test_language_switch_preserves_datetime(self):
+        """set_session_language must rebuild from the enhanced base, not pre-enhance text."""
+        config = AppConfig(system_prompt="You are a helpful assistant.")
+        assistant = _make_assistant_stub(config)
+        assistant._enhance_system_prompt()
+        assistant._base_system_prompt = assistant.config.system_prompt
+        assistant.llm = MagicMock()
+        assistant.llm_provider = "mlx"
+        assistant._set_session_language("Simplified Chinese")
+        assert "Current date and time:" in assistant.config.system_prompt
+        assert "Simplified Chinese" in assistant.config.system_prompt
+        assert "Current date and time:" in assistant.llm.system_prompt
 
 
 # ────────────────────────── mid-session STT/TTS model swap ──────────────────
@@ -187,6 +225,40 @@ class TestSttTtsModelHotSwap:
         result = assistant._tool_set_stt_model("not-a-model")
         assert result["ok"] is False
 
+    def test_set_stt_model_rejects_en_only_during_chinese_session(self):
+        """English-only Whisper must not load while the session is Chinese."""
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.config.whisper.model_size = "turbo"
+        assistant.config.whisper.language = "zh"
+        assistant.config.tts_backend = "apple_speech"
+        assistant.config.response_language = "Simplified Chinese"
+        result = assistant._tool_set_stt_model("small.en")
+        assert result["ok"] is False
+        assert "English-only" in result["error"]
+        assert assistant.config.whisper.model_size == "turbo"
+
+    def test_set_vad_mode_rejects_bad_threshold_without_mutating(self):
+        assistant = _make_assistant_stub()
+        assistant.config.audio.use_vad = True
+        assistant.config.audio.vad_auto_start = True
+        result = assistant._tool_set_vad_mode("manual", threshold=1.5)
+        assert result["ok"] is False
+        assert assistant.config.audio.vad_auto_start is True  # still auto
+        assert assistant.config.audio.use_vad is True
+
+    def test_set_vad_mode_rolls_back_on_silero_validation_failure(self):
+        assistant = _make_assistant_stub()
+        # Auto VAD requires sample_rate=16000; break it then request auto.
+        assistant.config.audio.use_vad = False
+        assistant.config.audio.vad_auto_start = False
+        assistant.config.audio.sample_rate = 44100
+        result = assistant._tool_set_vad_mode("auto")
+        assert result["ok"] is False
+        assert assistant.config.audio.use_vad is False
+        assert assistant.config.audio.vad_auto_start is False
+        assert assistant.config.audio.sample_rate == 44100
+
     def test_set_tts_model_reloads(self):
         assistant = _make_assistant_stub()
         assistant.tts = MagicMock()
@@ -224,6 +296,536 @@ class TestSttTtsModelHotSwap:
             result = assistant._tool_set_tts_model("bad-model")
         assert result["ok"] is False
         assert assistant.config.chatterbox.model_id == "old-model"
+
+    def test_set_tts_backend_loads_qwen_chinese(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.qwen_tts.QwenTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_backend("qwen_chinese")
+        assert result["ok"] is True
+        assert result["backend"] == "qwen_chinese"
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "qwen_chinese"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        ctor.assert_called_once()
+
+    def test_set_tts_backend_loads_macos_tingting(self):
+        # The tool-facing token stays "macos_tingting", but it now routes to
+        # the modern AVSpeechSynthesizer backend (in-process PCM) rather than
+        # the legacy say subprocess; macos_say remains selectable via config.
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_backend("macos_tingting")
+        assert result["ok"] is True
+        assert result["backend"] == "macos_tingting"
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "apple_speech"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        ctor.assert_called_once()
+
+    def test_set_tts_model_resets_language_pairing(self):
+        """A mid-session ChatterBox swap must not leave the session stuck in
+        Chinese mode (English voice speaking mandated Chinese)."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.chatterbox.model_id = "old-model"
+        assistant.config.whisper.language = "zh"
+        assistant._set_session_language("Simplified Chinese")
+        assert assistant.config.response_language == "Simplified Chinese"
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is True
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        assert "respond only in English" in assistant.config.system_prompt
+
+    def test_set_tts_model_noop_also_resets_language_pairing(self):
+        """The 'already using this model' fast path re-asserts English too."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.language = "zh"
+        assistant._set_session_language("Simplified Chinese")
+        result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is False
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+
+    def test_set_tts_model_same_model_does_not_noop_when_backend_is_chinese(self):
+        """Same ChatterBox model id while Qwen/macOS backend is active must
+        reload ChatterBox, not claim 'already using this TTS model'."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()  # the active Qwen service
+        assistant.config.tts_backend = "qwen_chinese"
+        assistant.config.whisper.language = "zh"
+        new_tts = MagicMock()
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=new_tts,
+        ) as ctor:
+            result = assistant._tool_set_tts_model("mlx-community/chatterbox-turbo-4bit")
+        assert result["ok"] is True
+        assert result["reloaded"] is True
+        assert assistant.tts is new_tts
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        ctor.assert_called_once()
+
+    def test_set_tts_backend_rejects_en_only_whisper_for_chinese(self):
+        """English-only Whisper checkpoints cannot transcribe Chinese; the
+        switch must fail loudly before touching any state."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.model_size = "small.en"
+        result = assistant._tool_set_tts_backend("macos_tingting")
+        assert result["ok"] is False
+        assert "English-only" in result["error"]
+        assert "small" in result["error"]  # suggests the multilingual twin
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+
+    def test_set_tts_backend_en_only_whisper_still_allows_english(self):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.whisper.model_size = "small.en"
+        result = assistant._tool_set_tts_backend("chatterbox_turbo")
+        assert result["ok"] is True
+
+    def test_set_tts_disable_twice_preserves_cached_backend(self):
+        """A repeated disable must not overwrite the cached backend with
+        'none'; otherwise re-enable restores a live TTS while tts_backend is
+        stuck at 'none' (breaks _ensure_voice_for_text's Chinese rescue)."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.tts_backend = "apple_speech"
+        assert assistant._tool_set_tts(False)["ok"] is True
+        assert assistant._tool_set_tts(False)["ok"] is True
+        assert assistant._tts_cached_backend == "apple_speech"
+        result = assistant._tool_set_tts(True)
+        assert result["ok"] is True
+        assert result["backend"] == "apple_speech"
+        assert assistant.tts is not None
+        assert assistant.config.tts_backend == "apple_speech"
+
+    def test_set_tts_enable_load_failure_restores_text_only_state(self):
+        """When re-enable has no cached instance and the backend fails to
+        load, config must roll back to 'none' rather than claim a backend
+        whose service is still None."""
+        assistant = _make_assistant_stub()
+        assistant.tts = None
+        assistant.config.tts_backend = "none"
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            side_effect=RuntimeError("load failed"),
+        ):
+            result = assistant._tool_set_tts(True)
+        assert result["ok"] is False
+        assert assistant.tts is None
+        assert assistant.config.tts_backend == "none"
+
+    def test_backend_switch_round_trip_repairs_language_pairing(self):
+        """English → Chinese → English → Chinese on one live session: every
+        hop must fully re-pair the voice with the STT input language and the
+        response directive, rebuilding the system prompt from the clean base
+        rather than stacking directives."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        base_prompt = assistant.config.system_prompt
+
+        with patch(
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("macos_tingting")["ok"] is True
+        assert assistant.config.tts_backend == "apple_speech"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        assert "respond only in Simplified Chinese" in assistant.config.system_prompt
+
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("chatterbox_turbo")["ok"] is True
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        assert "respond only in English" in assistant.config.system_prompt
+        # The Chinese-only directive is gone (the word "Chinese" legitimately
+        # remains — the English directive mentions it as a switch example).
+        assert "respond only in Simplified Chinese" not in assistant.config.system_prompt
+
+        # Second trip to Chinese: prompt rebuilt from the same clean base, so
+        # the session directive appears exactly once regardless of hop count.
+        with patch(
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("macos_tingting")["ok"] is True
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        assert assistant._base_system_prompt == base_prompt
+        assert assistant.config.system_prompt.count("For this session, respond only in") == 1
+
+    def test_chinese_directive_includes_tts_readiness_guidance(self):
+        """The Chinese session directive must coach the model toward output
+        that streams and speaks well: full-width punctuation, spoken-form
+        numbers, no Markdown."""
+        assistant = _make_assistant_stub()
+        assistant._set_session_language("Simplified Chinese")
+        prompt = assistant.config.system_prompt
+        assert "Simplified Chinese" in prompt
+        assert "。！？" in prompt
+        assert "百分之五十" in prompt
+
+    def test_chinese_directive_requires_switch_back_for_english(self):
+        """Mirror of the English directive: in a Chinese session the model must
+        switch the voice *before* replying in English, or the Chinese voice
+        reads the English reply unintelligibly."""
+        assistant = _make_assistant_stub()
+        assistant._set_session_language("Simplified Chinese")
+        prompt = assistant.config.system_prompt
+        assert "set_tts_backend" in prompt
+        assert "chatterbox_turbo" in prompt
+
+    def test_english_directive_requires_tts_switch_for_other_languages(self):
+        """In English mode the model must switch the voice before replying in
+        another language, or the English-only voice reads gibberish."""
+        assistant = _make_assistant_stub()
+        assistant._set_session_language("English")
+        prompt = assistant.config.system_prompt
+        assert "set_tts_backend" in prompt
+        assert "macos_tingting" in prompt
+
+
+# ────────────────────── _ensure_voice_for_text ──────────────────────
+
+
+class TestEnsureVoiceForText:
+    """Defensive guard: an English-only voice (chatterbox) reading Chinese text
+    produces gibberish. If a Chinese reply reaches playback without a voice
+    switch, the utterance is rescued by switching to Tingting."""
+
+    def test_switches_to_tingting_for_chinese_on_chatterbox(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True})
+        assistant._ensure_voice_for_text("你好，请用中文解释一遍")
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+
+    def test_returns_true_when_switch_succeeds(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True, "backend": "macos_tingting"})
+        assert assistant._ensure_voice_for_text("你好，世界") is True
+
+    def test_returns_false_when_switch_fails(self):
+        """An English-only Whisper checkpoint refuses the Chinese pairing; the
+        caller must skip synthesis rather than let the wrong voice read gibberish."""
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "whisper is English-only"})
+        assert assistant._ensure_voice_for_text("你好，世界") is False
+
+    def test_noop_for_english_text_on_chatterbox(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant._tool_set_tts_backend = MagicMock()
+        assistant._ensure_voice_for_text("explain that again in chinese")
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    def test_noop_when_voice_already_chinese(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock()
+        assistant._ensure_voice_for_text("你好，世界")
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    def test_speak_sentence_switches_then_speaks_chinese(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant.tts = MagicMock()
+        assistant.tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
+        assistant.audio = MagicMock()
+        assistant.audio.play_audio.return_value = True
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._speak_sentence("你好，世界。", {"_respond_start": time.perf_counter()})
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+        assert "你好" in assistant.tts.synthesize.call_args[0][0]
+
+    def test_speak_sentence_skips_audio_when_rescue_fails(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant.tts = MagicMock()
+        assistant.audio = MagicMock()
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+
+        assistant._speak_sentence("你好，世界。", {"_respond_start": time.perf_counter()})
+
+        assistant.tts.synthesize.assert_not_called()
+        assistant.audio.play_audio.assert_not_called()
+
+    def test_switches_to_chatterbox_for_english_on_chinese_voice(self):
+        """Reverse rescue: a full English reply on Tingting/Qwen is as
+        unintelligible as Chinese on ChatterBox; switch back before speaking."""
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True})
+        assistant._ensure_voice_for_text("Sure, I can continue speaking English.")
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+
+    def test_qwen_voice_also_rescues_english_reply(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "qwen_chinese"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": True})
+        assistant._ensure_voice_for_text("Sure, I can continue speaking English.")
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+
+    def test_returns_false_when_english_rescue_fails(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+        assert assistant._ensure_voice_for_text("Sure, I can continue speaking English.") is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "OK",  # short Latin blip: Chinese voice says it fine
+            "50%",  # no letters at all
+            "答案是 42。",  # CJK present: code-mixed stays on the Chinese voice
+            "Let me write 你好 in English.",  # mixed: CJK span must not hit ChatterBox
+        ],
+    )
+    def test_noop_for_blips_and_code_mixed_on_chinese_voice(self, text):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant._tool_set_tts_backend = MagicMock()
+        assert assistant._ensure_voice_for_text(text) is True
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    def test_speak_sentence_switches_then_speaks_english(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "apple_speech"
+        assistant.tts = MagicMock()
+        assistant.tts.synthesize.return_value = (24000, np.array([0.1], dtype=np.float32))
+        assistant.audio = MagicMock()
+        assistant.audio.play_audio.return_value = True
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._speak_sentence("Sure, I can continue speaking English.", {"_respond_start": time.perf_counter()})
+
+        assistant._tool_set_tts_backend.assert_called_once_with("chatterbox_turbo")
+        assert assistant.config.tts_backend == "chatterbox"
+        assert "Sure" in assistant.tts.synthesize.call_args[0][0]
+
+    def test_announce_spoken_rescues_chinese_text(self):
+        """Mid-turn announcements (e.g. the Cantonese-unsupported apology) can
+        also be Chinese on the English-only voice; they get the same rescue."""
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant.tts = MagicMock()
+        assistant.tts.synthesize_long_form.return_value = (24000, np.array([0.1], dtype=np.float32))
+        assistant.audio = MagicMock()
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._announce_spoken("抱歉，我暂时还不会说粤语。")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+        assistant.tts.synthesize_long_form.assert_called_once()
+
+    def test_announce_spoken_skips_audio_when_rescue_fails(self):
+        assistant = _make_assistant_stub()
+        assistant.config.tts_backend = "chatterbox"
+        assistant.tts = MagicMock()
+        assistant.audio = MagicMock()
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+
+        assistant._announce_spoken("抱歉，我暂时还不会说粤语。")
+
+        assistant.tts.synthesize_long_form.assert_not_called()
+        assistant.audio.play_audio.assert_not_called()
+
+
+# ────────────────────── _handle_direct_tts_backend_command ──────────────────────
+
+
+class TestDirectTtsBackendCommand:
+    def _make_assistant(self):
+        assistant = _make_assistant_stub()
+        assistant.stt = MagicMock()
+        assistant.llm = MagicMock()
+        assistant.tts = MagicMock()
+        assistant.audio = MagicMock()
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+        return assistant
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Questions *about* Chinese are not switch commands.
+            "Do you use Chinese in your answers?",
+            "What is the Chinese word for hello?",
+            "怎么使用中文输入法？",
+            "你能说中文吗？",
+            # Statements mentioning Chinese are not commands either.
+            "I use Chinese at work",
+            "My Chinese homework is hard",
+        ],
+    )
+    def test_questions_and_statements_do_not_hijack_turn(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is False
+        assistant._tool_set_tts_backend.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("text", "backend"),
+        [
+            ("Let's switch to Chinese", "macos_tingting"),
+            ("Use Qwen Chinese voice", "qwen_chinese"),
+            ("switch to the fast English voice", "chatterbox_turbo"),
+            ("Please change to English", "chatterbox_turbo"),
+            ("说中文", "macos_tingting"),
+            ("切换到中文", "macos_tingting"),
+            ("用中文回答", "macos_tingting"),
+            ("请说中文吧", "macos_tingting"),
+            ("切换到中文?", "macos_tingting"),
+            # Polite question *form*, but an unambiguous command: the ?-veto
+            # must not kill matched imperatives ("can you" prefixes exist for
+            # exactly these). "可以再讲英文吗?" still falls through (no
+            # imperative opener) and is handled by the LLM + voice rescue.
+            ("Can you switch back to English?", "chatterbox_turbo"),
+            ("Can you speak Chinese?", "macos_tingting"),
+        ],
+    )
+    def test_commands_switch_backend(self, text, backend):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is True
+        assistant._tool_set_tts_backend.assert_called_once_with(backend)
+
+    def test_confirmation_spoken_with_new_voice(self):
+        assistant = self._make_assistant()
+        assistant.tts.synthesize_long_form.return_value = (24000, np.array([0.1, -0.1], dtype=np.float32))
+        assert assistant._handle_direct_tts_backend_command("Let's switch to Chinese") is True
+        assistant.tts.synthesize_long_form.assert_called_once()
+        spoken_text = assistant.tts.synthesize_long_form.call_args[0][0]
+        assert "Tingting" in spoken_text
+        assistant.audio.play_audio.assert_called_once()
+
+    def test_failed_switch_prints_error_without_speaking(self):
+        assistant = self._make_assistant()
+        assistant._tool_set_tts_backend = MagicMock(return_value={"ok": False, "error": "boom"})
+        assert assistant._handle_direct_tts_backend_command("Let's switch to Chinese") is True
+        assistant.tts.synthesize.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_not_called()
+
+    def test_cantonese_in_english_gets_reply_without_voice_switch(self):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command("switch to Cantonese") is True
+        # The English apology speaks fine on the English voice — no switch.
+        assistant._tool_set_tts_backend.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_called_once()
+
+    @pytest.mark.parametrize("text", ["说粤语", "切换到广东话", "講廣東話好唔好"])
+    def test_cantonese_in_chinese_switches_voice_before_replying(self, text):
+        """The apology is phrased in the user's language; on the English-only
+        voice a Chinese apology must be rescued by switching to Tingting first,
+        or it is read aloud as gibberish."""
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is True
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+        assistant.tts.synthesize_long_form.assert_called_once()
+
+    @pytest.mark.parametrize("text", ["Do you speak Cantonese?", "你会说粤语吗？", "我唔識講廣東話"])
+    def test_cantonese_questions_and_statements_fall_through(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_direct_tts_backend_command(text) is False
+        assistant._tool_set_tts_backend.assert_not_called()
+        assistant.tts.synthesize_long_form.assert_not_called()
+
+
+# ────────────────────────── _handle_usage_command / _tool_voice_help ──────────────────────────
+
+
+class TestVoiceHelpCommand:
+    def _make_assistant(self, *, tier="Default", best="Default"):
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.tts.tier = tier
+        assistant._announce_spoken = MagicMock()
+        # _best_installed_tier hits AVFoundation; stub it to keep tests hermetic.
+        assistant._best_installed_tier = lambda _lang: best
+        return assistant
+
+    @pytest.mark.parametrize(
+        "text",
+        ["help", "usage", "voices", "better voice", "upgrade voices", "premium voices please"],
+    )
+    def test_aliases_trigger_the_shared_helper(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_usage_command(text) is True
+        assistant._announce_spoken.assert_called_once()
+        spoken = assistant._announce_spoken.call_args.args[0]
+        # The premium-voice upgrade path is always mentioned.
+        assert "Enhanced and Premium" in spoken or "增强版" in spoken
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "help me write a poem",  # 'help' but not voice-related
+            "what is the weather",  # unrelated
+            "tell me a joke",
+        ],
+    )
+    def test_unrelated_phrases_fall_through(self, text):
+        assistant = self._make_assistant()
+        assert assistant._handle_usage_command(text) is False
+        assistant._announce_spoken.assert_not_called()
+
+    def test_voice_help_payload_shape_and_upgrade_hint(self):
+        assistant = self._make_assistant(tier="Default", best="Default")
+        result = assistant._tool_voice_help()
+        assert result["ok"] is True
+        assert result["tier"] == "Default"
+        assert result["best_installed_tier"] == "Default"
+        assert "--list-voices" in result["message"]
+        assert result["message"] == result["spoken"]
+
+    def test_voice_help_notes_when_premium_already_installed(self):
+        assistant = self._make_assistant(tier="Premium", best="Premium")
+        result = assistant._tool_voice_help()
+        assert result["tier"] == "Premium"
+        assert "Premium-tier" in result["message"]
+
+    def test_best_installed_tier_degrades_when_avfoundation_unavailable(self):
+        """list_installed_voices raises RuntimeError (via _avfoundation) when
+        PyObjC/AVFoundation is absent; the helper must degrade to None so the
+        help path prints its fallback instead of a traceback."""
+        assistant = _make_assistant_stub()
+        with patch(
+            "localtalk.services.apple_speech_tts.list_installed_voices",
+            side_effect=RuntimeError("PyObjC not available"),
+        ):
+            assert assistant._best_installed_tier("en-US") is None
 
 
 # ────────────────────────── _init_services ──────────────────────────
@@ -289,6 +891,31 @@ class TestProcessTextResponse:
         assert assistant.audio.play_audio.call_args.kwargs.get("trail_silence_ms") == float(
             assistant.config.chatterbox.silence_between_pieces_ms
         )
+
+    def test_switch_to_chinese_is_handled_before_llm(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._process_text_response("Let's switch to Chinese")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+        assert not assistant.llm.generate_response.called
+
+    def test_switch_to_chinese_defaults_to_macos_tingting(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._process_text_response("Let's switch to Chinese")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("macos_tingting")
+
+    def test_switch_to_qwen_chinese_is_handled_before_llm(self):
+        assistant = self._make_assistant_with_mocks(tts=MagicMock())
+        assistant._tool_set_tts_backend = MagicMock(side_effect=_tts_switch_side_effect(assistant))
+
+        assistant._process_text_response("Use Qwen Chinese voice")
+
+        assistant._tool_set_tts_backend.assert_called_once_with("qwen_chinese")
 
     def test_with_save_audio_writes_each_tts_chunk(self, tmp_path):
         tts = MagicMock()
@@ -543,12 +1170,12 @@ class TestProcessVoiceInput:
         stdin.fileno.return_value = 10
         stdin.isatty.return_value = True
         with (
-            patch("localtalk.core.assistant.threading.Thread", FakeThread),
-            patch("localtalk.core.assistant.sys.stdin", stdin),
-            patch("localtalk.core.assistant._stdin_has_key", return_value=True),
-            patch("localtalk.core.assistant._read_key_raw", return_value="\x1b"),
-            patch("localtalk.core.assistant.termios") as termios_mock,
-            patch("localtalk.core.assistant.tty") as tty_mock,
+            patch("localtalk.core.terminal.threading.Thread", FakeThread),
+            patch("localtalk.core.terminal.sys.stdin", stdin),
+            patch("localtalk.core.terminal._stdin_has_key", return_value=True),
+            patch("localtalk.core.terminal._read_key_raw", return_value="\x1b"),
+            patch("localtalk.core.terminal.termios") as termios_mock,
+            patch("localtalk.core.terminal.tty") as tty_mock,
         ):
             result = assistant.process_voice_input()
 

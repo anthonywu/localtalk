@@ -44,19 +44,8 @@ def default_helper_bin_path() -> Path:
 
 
 def bundled_swift_source() -> Path:
-    """Locate ``main.swift`` shipped with the package or the repo checkout."""
-    here = Path(__file__).resolve()
-    candidates = [
-        # Installed / src layout: localtalk/native/foundation_models/main.swift
-        here.parents[1] / "native" / "foundation_models" / "main.swift",
-        # Repo root checkout: native/foundation_models/main.swift
-        here.parents[3] / "native" / "foundation_models" / "main.swift",
-        Path.cwd() / "native" / "foundation_models" / "main.swift",
-    ]
-    for path in candidates:
-        if path.is_file():
-            return path
-    return candidates[0]
+    """Locate ``main.swift`` shipped inside the package (single canonical copy)."""
+    return Path(__file__).resolve().parents[1] / "native" / "foundation_models" / "main.swift"
 
 
 def ensure_helper_binary(

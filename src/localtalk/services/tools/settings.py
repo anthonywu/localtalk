@@ -12,6 +12,7 @@ SetStr = Callable[[str], dict]
 SetGeneration = Callable[..., dict]
 SetVad = Callable[..., dict]
 SetBrowserEngine = Callable[[str], dict]
+VoiceHelp = Callable[[], dict]
 
 
 def make_set_show_reasoning_tool(set_show: SetBool) -> ToolSpec:
@@ -130,6 +131,7 @@ WHISPER_MODEL_SIZES = (
 
 SetSttModel = Callable[..., dict]
 SetTtsModel = Callable[..., dict]
+SetTtsBackend = Callable[[str], dict]
 
 
 def make_set_stt_model_tool(set_stt: SetSttModel) -> ToolSpec:
@@ -191,7 +193,7 @@ def make_set_tts_model_tool(set_tts_model: SetTtsModel) -> ToolSpec:
             "set_tts_model",
             (
                 "Hot-swap the text-to-speech model without restarting LocalTalk. "
-                "Pass a Hugging Face / mlx-audio model id, for example "
+                "Pass a ChatterBox Hugging Face / mlx-audio model id, for example "
                 "mlx-community/chatterbox-turbo-4bit. "
                 "Loads the new model into memory (may take a while) and enables TTS if it was off. "
                 "Use for advanced voice testing. Prefer set_tts only to mute/unmute without reloading."
@@ -213,6 +215,46 @@ def make_set_tts_model_tool(set_tts_model: SetTtsModel) -> ToolSpec:
             "Okay, I'm using the new text-to-speech model now."
             if r.get("ok")
             else f"Sorry, I couldn't change the speech synthesis model. {r.get('error') or ''}".strip()
+        ),
+    )
+
+
+def make_set_tts_backend_tool(set_tts_backend: SetTtsBackend) -> ToolSpec:
+    def handler(args: dict) -> dict:
+        backend = str(args.get("backend", "")).strip()
+        if backend not in {"chatterbox_turbo", "qwen_chinese", "macos_tingting"}:
+            return {"ok": False, "error": "backend must be chatterbox_turbo, qwen_chinese, or macos_tingting"}
+        return set_tts_backend(backend)
+
+    return ToolSpec(
+        name="set_tts_backend",
+        description=build_tool_description(
+            "set_tts_backend",
+            (
+                "Switch spoken replies between the fast English ChatterBox Turbo voice, the Chinese "
+                "Qwen3-TTS voice, and the native macOS Tingting Chinese voice without restarting. "
+                "Use macos_tingting when the user asks to speak Chinese or specifically asks for Tingting; "
+                "it needs no model download. Use qwen_chinese for the higher-quality local MLX option."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "backend": {
+                        "type": "string",
+                        "enum": ["chatterbox_turbo", "qwen_chinese", "macos_tingting"],
+                        "description": "The speech-synthesis backend to load",
+                    },
+                },
+                "required": ["backend"],
+                "additionalProperties": False,
+            },
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: (
+            "Okay, I switched to the macOS Tingting voice." if r.get("ok") and r.get("backend") == "macos_tingting"
+            else "Okay, I switched to the Chinese Qwen voice." if r.get("ok") and r.get("backend") == "qwen_chinese"
+            else "Okay, I switched to the fast English voice." if r.get("ok")
+            else f"Sorry, I couldn't switch the speech voice. {r.get('error') or ''}".strip()
         ),
     )
 
@@ -413,6 +455,34 @@ def _as_bool(raw: Any, name: str) -> bool:
     if isinstance(raw, str):
         return raw.strip().lower() in {"true", "1", "yes", "on"}
     raise TypeError(f"{name} must be a boolean")
+
+
+def make_voice_help_tool(voice_help: VoiceHelp) -> ToolSpec:
+    """In-session tool that reports available voice tiers + upgrade steps.
+
+    Shares the assistant's ``_tool_voice_help`` helper with the ``usage``/``help``
+    direct command, so the model can surface premium voices conversationally
+    (e.g. when asked 'can you sound more natural?').
+    """
+
+    def handler(args: dict) -> dict:
+        return voice_help()
+
+    return ToolSpec(
+        name="voice_help",
+        description=build_tool_description(
+            "voice_help",
+            (
+                "Tell the user about available speech voices and how to get higher-quality ones. "
+                "Use when the user asks about voice options, better/natural/premium/enhanced voices, "
+                "or says 'usage' or 'help'. Returns the active voice tier and the steps to download "
+                "an Enhanced or Premium voice. Takes no arguments."
+            ),
+            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        ),
+        handler=handler,
+        spoken_fallback=lambda r, a: r.get("spoken") or "Sorry, I couldn't fetch voice info.",
+    )
 
 
 def _bool_fallback(label: str, on_word: str, off_word: str):

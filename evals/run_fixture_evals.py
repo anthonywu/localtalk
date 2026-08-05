@@ -31,6 +31,8 @@ _ARGS = {
     "web_search": {"query": "current information"},
     "set_reasoning_level": {"level": "high"},
     "set_tts": {"enabled": False},
+    "set_tts_backend": {"backend": "macos_tingting"},
+    "voice_help": {},
     "set_browser_engine": {"engine": "safari"},
     "browser_navigate": {"url": "https://www.apple.com/macbook-pro/"},
     "browser_extract_text": {},
@@ -51,6 +53,12 @@ def _answer(case_id: str) -> str:
         "failed-search-useful-next-step": "According to the product page, I found the current price.",
         "malformed-tool-output-hidden": "Okay, online tools are off.",
         "spoken-plain-answer": "The capital of China is Beijing.",
+        "switch-to-chinese-voice": "Okay, I switched to the macOS Tingting voice. I'll respond in Simplified Chinese now.",
+        "switch-to-fast-english": "Okay, I switched to the fast English voice.",
+        "voice-help-natural-voice": (
+            "You're on the Default-tier voice. Higher-quality Enhanced and Premium voices are "
+            "available from Apple. Run 'localtalk --list-voices' to see them."
+        ),
     }
     return answers[case_id]
 
@@ -76,7 +84,32 @@ def _make_service(web_enabled: bool, state: dict) -> MLXLanguageModelService:
         state["tts_enabled"] = enabled
         return {"ok": True, "tts_enabled": enabled}
 
-    service.session_control = {"set_tts": set_tts}
+    def set_tts_backend(backend: str) -> dict:
+        target = {"qwen_chinese": "qwen_chinese", "macos_tingting": "apple_speech"}.get(backend, "chatterbox")
+        state["tts_backend"] = target
+        is_chinese = target in {"qwen_chinese", "apple_speech"}
+        return {
+            "ok": True,
+            "backend": backend,
+            "language": "Simplified Chinese" if is_chinese else "English",
+        }
+
+    def voice_help() -> dict:
+        return {
+            "ok": True,
+            "spoken": (
+                "You're on the Default-tier voice. Higher-quality Enhanced and Premium voices are "
+                "available from Apple. Run 'localtalk --list-voices' to see them."
+            ),
+            "tier": "Default",
+            "best_installed_tier": "Default",
+        }
+
+    service.session_control = {
+        "set_tts": set_tts,
+        "set_tts_backend": set_tts_backend,
+        "voice_help": voice_help,
+    }
     service.tool_registry = service._build_tool_registry()
     return service
 
@@ -98,6 +131,8 @@ def run_cases(cases_path: Path) -> list[dict]:
             scripted[0] = ToolCall("set_web_tools", {"enabled": False})
         if case["id"] == "offline-fact-search-get":
             scripted[1] = ToolCall("query_knowledge", {"action": "get", "query": "Paris"})
+        if case["id"] == "switch-to-fast-english":
+            scripted[0] = ToolCall("set_tts_backend", {"backend": "chatterbox_turbo"})
         sequence = [("", [], call) for call in scripted] + [(_answer(case["id"]), [], None)]
         service._stream_tokens = MagicMock(return_value=([], None))
         service._parse_response = MagicMock(side_effect=sequence)
