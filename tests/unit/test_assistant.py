@@ -441,6 +441,50 @@ class TestSttTtsModelHotSwap:
         assert assistant.tts is None
         assert assistant.config.tts_backend == "none"
 
+    def test_backend_switch_round_trip_repairs_language_pairing(self):
+        """English → Chinese → English → Chinese on one live session: every
+        hop must fully re-pair the voice with the STT input language and the
+        response directive, rebuilding the system prompt from the clean base
+        rather than stacking directives."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        base_prompt = assistant.config.system_prompt
+
+        with patch(
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("macos_tingting")["ok"] is True
+        assert assistant.config.tts_backend == "apple_speech"
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        assert "respond only in Simplified Chinese" in assistant.config.system_prompt
+
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("chatterbox_turbo")["ok"] is True
+        assert assistant.config.tts_backend == "chatterbox"
+        assert assistant.config.whisper.language == "en"
+        assert assistant.config.response_language == "English"
+        assert "respond only in English" in assistant.config.system_prompt
+        # The Chinese-only directive is gone (the word "Chinese" legitimately
+        # remains — the English directive mentions it as a switch example).
+        assert "respond only in Simplified Chinese" not in assistant.config.system_prompt
+
+        # Second trip to Chinese: prompt rebuilt from the same clean base, so
+        # the session directive appears exactly once regardless of hop count.
+        with patch(
+            "localtalk.services.apple_speech_tts.AppleSpeechTextToSpeechService",
+            return_value=MagicMock(),
+        ):
+            assert assistant._tool_set_tts_backend("macos_tingting")["ok"] is True
+        assert assistant.config.whisper.language == "zh"
+        assert assistant.config.response_language == "Simplified Chinese"
+        assert assistant._base_system_prompt == base_prompt
+        assert assistant.config.system_prompt.count("For this session, respond only in") == 1
+
     def test_chinese_directive_includes_tts_readiness_guidance(self):
         """The Chinese session directive must coach the model toward output
         that streams and speaks well: full-width punctuation, spoken-form
