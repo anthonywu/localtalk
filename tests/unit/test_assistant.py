@@ -409,6 +409,38 @@ class TestSttTtsModelHotSwap:
         result = assistant._tool_set_tts_backend("chatterbox_turbo")
         assert result["ok"] is True
 
+    def test_set_tts_disable_twice_preserves_cached_backend(self):
+        """A repeated disable must not overwrite the cached backend with
+        'none'; otherwise re-enable restores a live TTS while tts_backend is
+        stuck at 'none' (breaks _ensure_voice_for_text's Chinese rescue)."""
+        assistant = _make_assistant_stub()
+        assistant.tts = MagicMock()
+        assistant.config.tts_backend = "apple_speech"
+        assert assistant._tool_set_tts(False)["ok"] is True
+        assert assistant._tool_set_tts(False)["ok"] is True
+        assert assistant._tts_cached_backend == "apple_speech"
+        result = assistant._tool_set_tts(True)
+        assert result["ok"] is True
+        assert result["backend"] == "apple_speech"
+        assert assistant.tts is not None
+        assert assistant.config.tts_backend == "apple_speech"
+
+    def test_set_tts_enable_load_failure_restores_text_only_state(self):
+        """When re-enable has no cached instance and the backend fails to
+        load, config must roll back to 'none' rather than claim a backend
+        whose service is still None."""
+        assistant = _make_assistant_stub()
+        assistant.tts = None
+        assistant.config.tts_backend = "none"
+        with patch(
+            "localtalk.services.mlx_tts.MLXTextToSpeechService",
+            side_effect=RuntimeError("load failed"),
+        ):
+            result = assistant._tool_set_tts(True)
+        assert result["ok"] is False
+        assert assistant.tts is None
+        assert assistant.config.tts_backend == "none"
+
     def test_chinese_directive_includes_tts_readiness_guidance(self):
         """The Chinese session directive must coach the model toward output
         that streams and speaks well: full-width punctuation, spoken-form
@@ -669,6 +701,17 @@ class TestVoiceHelpCommand:
         result = assistant._tool_voice_help()
         assert result["tier"] == "Premium"
         assert "Premium-tier" in result["message"]
+
+    def test_best_installed_tier_degrades_when_avfoundation_unavailable(self):
+        """list_installed_voices raises RuntimeError (via _avfoundation) when
+        PyObjC/AVFoundation is absent; the helper must degrade to None so the
+        help path prints its fallback instead of a traceback."""
+        assistant = _make_assistant_stub()
+        with patch(
+            "localtalk.services.apple_speech_tts.list_installed_voices",
+            side_effect=RuntimeError("PyObjC not available"),
+        ):
+            assert assistant._best_installed_tier("en-US") is None
 
 
 # ────────────────────────── _init_services ──────────────────────────

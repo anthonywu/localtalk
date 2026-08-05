@@ -80,9 +80,12 @@ class SessionTools:
         """
         try:
             from localtalk.services.apple_speech_tts import list_installed_voices
+
+            # The RuntimeError surfaces here (via _avfoundation()), not at
+            # import: the module deliberately defers AVFoundation loading.
+            natural = [v for v in list_installed_voices(language) if not v.is_eloquence]
         except RuntimeError:
             return None
-        natural = [v for v in list_installed_voices(language) if not v.is_eloquence]
         return max(natural, key=lambda v: v.quality).tier if natural else None
 
     def voice_help(self) -> dict:
@@ -203,6 +206,9 @@ class SessionTools:
                         assistant.config.tts_backend = assistant._tts_cached_backend
                         assistant.tts = self.load_tts_service(assistant.console)
                     except Exception as exc:
+                        # Restore the text-only state; a failed load must not
+                        # leave config claiming a backend with tts still None.
+                        assistant.config.tts_backend = "none"
                         return {"ok": False, "error": f"could not enable TTS: {exc}"}
             assistant.console.print("[cyan]TTS set to: on[/cyan]")
             return {
@@ -211,9 +217,11 @@ class SessionTools:
                 "model_id": self.active_tts_model_id(),
                 "backend": assistant.config.tts_backend,
             }
-        # Disable without unloading so re-enable is fast
+        # Disable without unloading so re-enable is fast. Guard the snapshot so
+        # a repeated disable doesn't overwrite the saved backend with "none".
         model_id = self.active_tts_model_id()
-        assistant._tts_cached_backend = assistant.config.tts_backend
+        if assistant.config.tts_backend != "none":
+            assistant._tts_cached_backend = assistant.config.tts_backend
         assistant.config.tts_backend = "none"
         if assistant.tts is not None:
             assistant._tts_cached = assistant.tts
