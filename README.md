@@ -1,3 +1,5 @@
+
+
 # 💻🎤🔊 localtalk
 
 **A voice assistant that never leaves your Mac.**
@@ -224,10 +226,10 @@ Chinese speech is transcribed as Chinese rather than forced through the English 
 
 ### Disabling Progress Bars
 
-If you prefer to disable progress bar output during model loading, set the environment variable:
+Progress bars are disabled by default to prevent interference with the terminal UI. If you need to re-enable them for debugging, unset the environment variable:
 
 ```bash
-export TQDM_DISABLE=1
+unset TQDM_DISABLE
 localtalk
 ```
 
